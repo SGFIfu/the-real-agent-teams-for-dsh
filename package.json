@@ -1,0 +1,70 @@
+{
+  "name": "dsh-agent-teams",
+  "description": "Native DeepSeek Harness Cordis plugin: multi-agent team runtime (lead + persistent continuable teammates + shared task board + DAG dependencies + atomic claiming + messaging + plan approval + file claims + reviewers + web UI)",
+  "version": "0.1.0",
+  "license": "MIT",
+  "type": "module",
+  "main": "lib/index.js",
+  "types": "lib/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/index.d.ts",
+      "default": "./lib/index.js"
+    },
+    "./core": {
+      "types": "./lib/core/index.d.ts",
+      "default": "./lib/core/index.js"
+    },
+    "./client": {
+      "types": "./lib/client.d.ts",
+      "default": "./lib/client.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib/index.js",
+    "lib/core/**/*.js",
+    "lib/core/**/*.d.ts",
+    "lib/client.js",
+    "lib/client.d.ts",
+    "lib/harness/**/*.js",
+    "lib/harness/**/*.d.ts",
+    "cordis.patch.yml",
+    "presets",
+    "docs",
+    "examples",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json && node scripts/build-client-module.mjs",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "node tests/run-in-process.mjs && node tests/client-module-bundle.mjs"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": ">=4.0.1",
+    "react": "^18.2.0",
+    "zod": "^4.0.0"
+  },
+  "dependencies": {
+    "@deepseek-ai/dsh-storage-domain": "0.1.0-rc.6",
+    "@deepseek-ai/schemastery": "^3.18.0",
+    "zod": "^4.4.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "typescript": "^5.6.0"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-runtime",
+        "@deepseek-ai/dsh-client-ui-sidebar"
+      ]
+    }
+  }
+}

@@ -1,0 +1,26 @@
+# dsh-agent-teams bundle patch.
+#
+# One INCREMENTAL layer over the composed profile (applied after dsh-base and
+# the surface bundle, before the profile's own cordis.patch.yml). It adds a
+# single host-plane row — the Agent Teams coordination service — and nothing
+# else: it does NOT re-mount core services (storage, storage-domain, tools,
+# system-prompt, commands, subagents, webserver are all provided by the base /
+# web layers) and it does NOT touch any existing row.
+#
+# The row declares `inject` on the services it consumes so Cordis activates
+# it only after the registries exist; every capability is read through the
+# public service interfaces.
+
+- insert:
+    - id: agent-teams
+      name: 'dsh-agent-teams'
+      inject: [storageDomain, subagents, tools, systemPrompt, webServer]
+      config:
+        # Default subagent provider for spawned teammates (the native runtime
+        # provider name — `spawn` is the in-process default of the web profile).
+        defaultProvider: spawn
+        # V1 safety cap on simultaneously registered teammates per team.
+        maxActiveMembers: 5
+        # 'auto' uses the harness storage domain (durable, backend-routed);
+        # 'memory' forces the in-memory store (ephemeral, tests only).
+        storageMode: auto

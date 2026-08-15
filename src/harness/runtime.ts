@@ -1,0 +1,138 @@
+/**
+ * The harness runtime adapter: Agent Teams orchestration rides the NATIVE
+ * subagent runtime (`ctx.subagents`) — continuable children, followup,
+ * report, interrupt, and child listing. No second agent runtime exists.
+ * @module dsh-agent-teams/harness
+ */
+import type { Context } from '@deepseek-ai/cordis';
+import type { Agent } from '@deepseek-ai/dsh-agent';
+import type { SessionId } from '@deepseek-ai/dsh-session';
+import type { SubagentRuntime } from '@deepseek-ai/dsh-subagent';
+import { TeamError, teamError } from '../core/errors.ts';
+import type { SpawnResult, SpawnSpec, TeamRuntimeAdapter } from '../core/types.ts';
+
+export interface RuntimeDeps {
+  ctx: Context;
+  subagents?: SubagentRuntime;
+  defaultProvider: string;
+}
+
+function textBlock(text: string): Array<{ type: 'text'; text: string }> {
+  return [{ type: 'text', text }];
+}
+
+/** The exact live direct parent agent for followup authority. */
+function liveAgent(ctx: Context, sessionId: string): Agent | undefined {
+  const agents = ctx.get('agents') as { get(id: string): Agent | undefined } | undefined;
+  return agents?.get(sessionId);
+}
+
+export class HarnessRuntimeAdapter implements TeamRuntimeAdapter {
+  constructor(private readonly deps: RuntimeDeps) {}
+
+  private requireSubagents(): SubagentRuntime {
+    if (this.deps.subagents === undefined) {
+      throw teamError('SUBAGENT_UNAVAILABLE', 'the harness subagent runtime is not mounted');
+    }
+    return this.deps.subagents;
+  }
+
+  async startContinuable(spec: SpawnSpec): Promise<SpawnResult> {
+    const subagents = this.requireSubagents();
+    // The spawn tool passes a lead HANDLE ({__teamLeadSessionId}); resolve it
+    // to the live parent Agent — the native runtime reads real Agent fields
+    // (e.g. its request header) and cannot accept the handle itself.
+    const handle = spec.parent as { __teamLeadSessionId?: string } | undefined;
+    const leadId = handle?.__teamLeadSessionId;
+    const lead = leadId === undefined ? undefined : liveAgent(this.deps.ctx, leadId);
+    if (lead === undefined) throw teamError('SUBAGENT_UNAVAILABLE', `lead agent ${leadId} is not live`);
+    try {
+      const start = await subagents.startContinuable({
+        provider: spec.provider || this.deps.defaultProvider,
+        label: spec.label,
+        request: {
+          prompt: textBlock(spec.promptText),
+          parent: lead,
+          ...(spec.maxDepth !== undefined ? { maxDepth: spec.maxDepth } : {}),
+          ...(spec.toolFilter !== undefined ? { toolFilter: spec.toolFilter } : {}),
+          ...(spec.persona !== undefined ? { persona: spec.persona } : {}),
+        },
+        signal: spec.signal ?? new AbortController().signal,
+      });
+      return { childId: start.childId, messageId: start.messageId };
+    } catch (error) {
+      if (error instanceof TeamError) throw error;
+      const message = error instanceof Error ? error.message : String(error);
+      if (/capab/i.test(message)) {
+        throw teamError('SUBAGENT_CAPABILITY_UNSUPPORTED', `provider does not support a requested capability: ${message}`, { provider: spec.provider });
+      }
+      throw teamError('SUBAGENT_UNAVAILABLE', `failed to start continuable teammate: ${message}`, { provider: spec.provider });
+    }
+  }
+
+  async followup(parent: unknown, childId: string, text: string, senderSessionId?: string): Promise<void> {
+    const subagents = this.requireSubagents();
+    const handle = parent as { __teamLeadSessionId?: string } | undefined;
+    const sessionId = handle?.__teamLeadSessionId;
+    if (sessionId === undefined) throw teamError('SUBAGENT_UNAVAILABLE', 'lead agent handle missing');
+    const lead = liveAgent(this.deps.ctx, sessionId);
+    if (lead === undefined) throw teamError('SUBAGENT_UNAVAILABLE', `lead agent ${sessionId} is not live`);
+    try {
+      await subagents.followup(lead, childId as SessionId, textBlock(text), {
+        source: { kind: 'coordinator', form: 'relay', senderSessionId: (senderSessionId ?? sessionId) as SessionId },
+        signal: new AbortController().signal,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw teamError('SUBAGENT_UNAVAILABLE', `followup delivery failed: ${message}`, { childId });
+    }
+  }
+
+  async reportFrom(child: unknown, text: string): Promise<void> {
+    const subagents = this.requireSubagents();
+    const handle = child as { __teamMemberSessionId?: string } | undefined;
+    const sessionId = handle?.__teamMemberSessionId;
+    if (sessionId === undefined) throw teamError('SUBAGENT_UNAVAILABLE', 'member agent handle missing');
+    const agent = liveAgent(this.deps.ctx, sessionId);
+    if (agent === undefined) throw teamError('SUBAGENT_UNAVAILABLE', `member agent ${sessionId} is not live`);
+    try {
+      await subagents.reportFrom(agent, textBlock(text), {
+        delivery: 'quiet',
+        signal: new AbortController().signal,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw teamError('SUBAGENT_UNAVAILABLE', `report delivery failed: ${message}`, { sessionId });
+    }
+  }
+
+  interrupt(targetSessionId: string, ancestor: unknown): void {
+    const subagents = this.requireSubagents();
+    const handle = ancestor as { __teamLeadSessionId?: string } | undefined;
+    const sessionId = handle?.__teamLeadSessionId;
+    const lead = sessionId === undefined ? undefined : liveAgent(this.deps.ctx, sessionId);
+    if (lead !== undefined) {
+      subagents.interrupt(targetSessionId as SessionId, { kind: 'ancestor', agent: lead });
+    }
+  }
+
+  async listChildrenOf(parentSessionId: string): Promise<Array<{ sessionId: string; label?: string }>> {
+    const subagents = this.requireSubagents();
+    try {
+      const children = await subagents.listChildren(parentSessionId as SessionId);
+      return children.map((child) => ({ sessionId: child.id, label: child.kind === 'child' ? child.label : undefined }));
+    } catch {
+      return [];
+    }
+  }
+}
+
+/** Member handle helper: wraps a member session id for reportFrom. */
+export function memberHandle(sessionId: string): unknown {
+  return { __teamMemberSessionId: sessionId };
+}
+
+/** Lead handle helper: wraps the lead session id for followup/interrupt. */
+export function leadHandle(sessionId: string): unknown {
+  return { __teamLeadSessionId: sessionId };
+}
