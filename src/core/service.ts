@@ -39,7 +39,7 @@ import type {
   WorkspaceActor,
   WorkspaceManager,
 } from './workspace.ts';
-import { capabilityAudit, hasCapabilities, normalizeCapabilities } from './capabilities.ts';
+import { capabilityAudit, classifyToolCapability, hasCapabilities, normalizeCapabilities, type ToolCapabilityDecision } from './capabilities.ts';
 
 export interface ServiceDeps {
   store: TeamStore;
@@ -524,6 +524,69 @@ export class AgentTeamsService {
       command: input.command,
       workspace: input.workspace,
     }));
+  }
+
+  /**
+   * Enforce the bounded capability policy at the host tool boundary.
+   *
+   * Team coordination tools keep their own typed authorization rules. This
+   * guard covers the host's repository/process tools when a real teammate is
+   * the caller, so a model cannot turn a descriptive capability record into an
+   * unrestricted shell or an unowned file write.
+   */
+  async authorizeToolCapability(input: {
+    sessionId: SessionId;
+    toolName: string;
+    arguments: unknown;
+  }): Promise<ToolCapabilityDecision> {
+    const members = await this.store.list('members', (member) => member.sessionId === input.sessionId);
+    if (members.length === 0) return { allowed: true };
+    if (members.length !== 1) {
+      return { allowed: false, reason: 'session is registered in multiple teams' };
+    }
+    const member = members[0] as TeamMember;
+    const action = classifyToolCapability(input.toolName, input.arguments);
+    if (action === undefined) return { allowed: true };
+
+    let allowed = (member.capabilities ?? []).includes(action.capability);
+    let reason: string | undefined = allowed ? undefined : `member lacks capability ${action.capability}`;
+    if (allowed && action.protectedGitAction !== undefined) {
+      allowed = false;
+      reason = `protected action denied: ${action.protectedGitAction}`;
+    }
+    if (allowed && action.capability === 'repo.write.owned') {
+      const path = action.path;
+      if (path === undefined || path.trim() === '') {
+        allowed = false;
+        reason = 'a concrete file path is required for an owned write';
+      } else {
+        const normalized = this.normalizePattern(path);
+        const claims = await this.store.list('file_claims', (claim) => claim.teamId === member.teamId);
+        const ownsPath = claims.some((claim) => claim.ownerSessionId === member.sessionId && this.patternsConflict(claim, normalized));
+        if (!ownsPath) {
+          allowed = false;
+          reason = `file is not covered by a claim owned by ${member.sessionId}`;
+        }
+      }
+    }
+
+    this.emit(events.CAPABILITY_DECISION, capabilityAudit({
+      teamId: member.teamId,
+      memberId: member.id,
+      sessionId: member.sessionId,
+      capability: action.capability,
+      allowed,
+      command: action.command ?? input.toolName,
+      workspace: action.workspace ?? action.path,
+    }));
+    return {
+      allowed,
+      capability: action.capability,
+      command: action.command,
+      path: action.path,
+      workspace: action.workspace,
+      reason,
+    };
   }
 
   async removeMember(memberId: string, actor: SessionId): Promise<void> {
