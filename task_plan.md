@@ -133,7 +133,7 @@ Upgrade the existing Team runtime with explicit workspace/Git responsibility tra
 ### Current blockers
 
 - Harness peer type packages are not currently present at the absolute paths in `tsconfig.json`; typecheck/build are failing before implementation changes.
-- No delegated subagent execution tool is available in this thread. The lead will enforce the protocol with isolated branches/worktrees and will not claim parallel Agent execution that did not occur.
+- Codex built-in subagents are available and have been assigned disjoint implementation/review lanes. The lead will integrate only verified commits and will not claim parallel Agent execution without evidence.
 
 ### Errors encountered
 
