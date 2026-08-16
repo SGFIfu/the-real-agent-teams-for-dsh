@@ -20,6 +20,7 @@ import type {
   TeamMemberId,
   WorkspaceId,
 } from './types.ts';
+import { TeamError } from './errors.ts';
 import { newId } from './ids.ts';
 
 export type WorkspaceErrorCode =
@@ -34,21 +35,13 @@ export type WorkspaceErrorCode =
   | 'FILE_CLAIM_NOT_FOUND'
   | 'INVALID_INPUT';
 
-/** A typed error that can be serialized by a future service/HTTP adapter. */
-export class WorkspaceError extends Error {
-  readonly code: WorkspaceErrorCode;
-  readonly details?: Record<string, unknown>;
-
+/** A typed error that shares the Service/tool error serialization contract. */
+export class WorkspaceError extends TeamError {
   constructor(code: WorkspaceErrorCode, message: string, details?: Record<string, unknown>) {
-    super(message);
+    super(code, message, details);
     this.name = 'WorkspaceError';
-    this.code = code;
-    this.details = details;
   }
 
-  toJSON(): { code: WorkspaceErrorCode; message: string; details?: Record<string, unknown> } {
-    return { code: this.code, message: this.message, details: this.details };
-  }
 }
 
 export interface WorkspaceActor {

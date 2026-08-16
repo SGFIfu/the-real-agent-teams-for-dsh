@@ -9,17 +9,11 @@
  */
 import type { TeamStore } from './store.ts';
 import type { FileClaim, FileClaimKind, SessionId, TeamWorkspace, TaskId, TeamId, TeamMemberId, WorkspaceId } from './types.ts';
+import { TeamError } from './errors.ts';
 export type WorkspaceErrorCode = 'TEAM_NOT_FOUND' | 'MEMBER_NOT_FOUND' | 'TASK_NOT_FOUND' | 'UNAUTHORIZED_TEAM_ACCESS' | 'WORKSPACE_NOT_FOUND' | 'WORKSPACE_OWNERSHIP_CONFLICT' | 'WORKSPACE_PATH_ESCAPE' | 'FILE_CLAIM_CONFLICT' | 'FILE_CLAIM_NOT_FOUND' | 'INVALID_INPUT';
-/** A typed error that can be serialized by a future service/HTTP adapter. */
-export declare class WorkspaceError extends Error {
-    readonly code: WorkspaceErrorCode;
-    readonly details?: Record<string, unknown>;
+/** A typed error that shares the Service/tool error serialization contract. */
+export declare class WorkspaceError extends TeamError {
     constructor(code: WorkspaceErrorCode, message: string, details?: Record<string, unknown>);
-    toJSON(): {
-        code: WorkspaceErrorCode;
-        message: string;
-        details?: Record<string, unknown>;
-    };
 }
 export interface WorkspaceActor {
     teamId: TeamId | string;

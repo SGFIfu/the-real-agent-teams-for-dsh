@@ -24,6 +24,7 @@ import './harness/declare.ts';
 import { AgentTeamsService } from './core/service.ts';
 import { ReviewDomain } from './core/review.ts';
 import { createRuntimeEventLog } from './core/runtime-events.ts';
+import { WorkspaceManager } from './core/workspace.ts';
 import { MemoryStore, type TeamStore } from './core/store.ts';
 import { LEAD_APPENDIX, TEAM_PROTOCOL_CORE } from './core/prompts.ts';
 import { DomainStore } from './harness/domain-store.ts';
@@ -134,6 +135,7 @@ export function apply(ctx: Context, config: Config): void {
       runtime,
       review: new ReviewDomain({ store }),
       runtimeEvents: createRuntimeEventLog(store),
+      workspace: new WorkspaceManager({ store }),
       sink: new CordisEventSink(ctx),
       defaultProvider: config.defaultProvider,
       maxActiveMembers: config.maxActiveMembers,

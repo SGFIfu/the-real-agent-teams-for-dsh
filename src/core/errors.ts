@@ -42,7 +42,10 @@ export type TeamErrorCode =
   | 'REVIEW_FINDING_INVALID'
   | 'REVIEW_NOT_APPROVABLE'
   | 'QA_EVIDENCE_MISSING'
-  | 'QA_EVIDENCE_INVALID';
+  | 'QA_EVIDENCE_INVALID'
+  | 'WORKSPACE_NOT_FOUND'
+  | 'WORKSPACE_OWNERSHIP_CONFLICT'
+  | 'WORKSPACE_PATH_ESCAPE';
 
 export interface TeamErrorPayload {
   code: TeamErrorCode;

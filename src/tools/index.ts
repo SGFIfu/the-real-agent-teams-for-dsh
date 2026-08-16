@@ -522,6 +522,42 @@ export function registerTeamTools(deps: ToolsDeps): Array<() => void> {
     ),
   );
 
+  // ── workspaces and leases ────────────────────────────────────────────────
+  register(
+    defineTool(
+      deps,
+      'team_workspace_create',
+      'Create a durable, session-bound Git workspace lease for implementation work.',
+      params(
+        {
+          teamId: stringProp('Team id'),
+          taskId: optionalStringProp('Optional task id bound to the workspace'),
+          repositoryRoot: stringProp('Approved absolute repository root'),
+          branch: stringProp('Safe Git branch name'),
+          worktreePath: stringProp('Approved absolute worktree path'),
+        },
+        ['teamId', 'repositoryRoot', 'branch', 'worktreePath'],
+      ),
+      (args, actor, s) => s.createWorkspace({ teamId: args.teamId, taskId: args.taskId, repositoryRoot: args.repositoryRoot, branch: args.branch, worktreePath: args.worktreePath }, actor),
+    ),
+  );
+
+  register(
+    defineTool(deps, 'team_workspace_list', 'List durable workspaces visible to the calling Team member.', params({ teamId: stringProp('Team id') }, ['teamId']), (args, actor, s) => s.listWorkspaces(args.teamId, actor)),
+  );
+
+  register(
+    defineTool(deps, 'team_workspace_get', 'Read one session-bound workspace lease.', params({ teamId: stringProp('Team id'), workspaceId: stringProp('Workspace id') }, ['teamId', 'workspaceId']), (args, actor, s) => s.getWorkspace(args.workspaceId, args.teamId, actor)),
+  );
+
+  register(
+    defineTool(deps, 'team_workspace_heartbeat', 'Renew the calling member workspace lease.', params({ teamId: stringProp('Team id'), workspaceId: stringProp('Workspace id') }, ['teamId', 'workspaceId']), (args, actor, s) => s.heartbeatWorkspace(args.workspaceId, args.teamId, actor)),
+  );
+
+  register(
+    defineTool(deps, 'team_workspace_release', 'Release the calling member workspace lease.', params({ teamId: stringProp('Team id'), workspaceId: stringProp('Workspace id') }, ['teamId', 'workspaceId']), (args, actor, s) => s.releaseWorkspace(args.workspaceId, args.teamId, actor)),
+  );
+
   // ── file claims ────────────────────────────────────────────────────────────
   register(
     defineTool(
@@ -531,12 +567,13 @@ export function registerTeamTools(deps: ToolsDeps): Array<() => void> {
       params(
         {
           teamId: stringProp('Team id'),
+          workspaceId: optionalStringProp('Optional workspace lease id'),
           patterns: arrayOfStrings('Paths: src/a.ts (file), src/ (directory), src/server/** (glob)'),
           purpose: stringProp('Why the claim is needed'),
         },
         ['teamId', 'patterns', 'purpose'],
       ),
-      (args, actor, s) => s.claimFiles({ teamId: args.teamId, ownerSessionId: actor, patterns: args.patterns, purpose: args.purpose }),
+      (args, actor, s) => s.claimFiles({ teamId: args.teamId, ownerSessionId: actor, workspaceId: args.workspaceId, patterns: args.patterns, purpose: args.purpose }),
     ),
   );
 
@@ -546,6 +583,16 @@ export function registerTeamTools(deps: ToolsDeps): Array<() => void> {
 
   register(
     defineTool(deps, 'team_file_claims', 'List all file claims in the team.', params({ teamId: stringProp('Team id') }, ['teamId']), (args, actor, s) => s.listFileClaims(args.teamId, actor)),
+  );
+
+  register(
+    defineTool(
+      deps,
+      'team_file_handoff',
+      'Hand off an owned file lease to another real Team member after coordination.',
+      params({ teamId: stringProp('Team id'), claimId: stringProp('File claim id'), toSessionId: stringProp('Target member session id'), toMemberId: optionalStringProp('Target member id'), purpose: optionalStringProp('Updated ownership purpose') }, ['teamId', 'claimId', 'toSessionId']),
+      (args, actor, s) => s.handoffFile({ teamId: args.teamId, claimId: args.claimId, toSessionId: args.toSessionId, toMemberId: args.toMemberId, purpose: args.purpose }, actor),
+    ),
   );
 
   // ── review findings ────────────────────────────────────────────────────────

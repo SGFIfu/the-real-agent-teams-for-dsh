@@ -34,6 +34,11 @@ import type {
   CreateReviewRequestInput,
   ReviewSubmission,
 } from './review.ts';
+import type {
+  CreateWorkspaceInput,
+  WorkspaceActor,
+  WorkspaceManager,
+} from './workspace.ts';
 
 export interface ServiceDeps {
   store: TeamStore;
@@ -49,6 +54,8 @@ export interface ServiceDeps {
   review?: ReviewDomain;
   /** Optional durable audit projection; live sink remains the UI notification path. */
   runtimeEvents?: RuntimeEventLog;
+  /** Optional workspace/lease authority used by the production Harness instance. */
+  workspace?: WorkspaceManager;
 }
 
 const PRIORITY_RANK: Record<TaskPriority, number> = { critical: 0, high: 1, normal: 2, low: 3 };
@@ -65,6 +72,7 @@ export class AgentTeamsService {
   readonly maxActiveMembers: number;
   readonly review?: ReviewDomain;
   readonly runtimeEvents?: RuntimeEventLog;
+  readonly workspace?: WorkspaceManager;
   private readyFlag = false;
   /** Serializes multi-record invariants within one plugin process. */
   private readonly teamMutationQueues = new Map<string, Promise<void>>();
@@ -77,6 +85,7 @@ export class AgentTeamsService {
     this.maxActiveMembers = deps.maxActiveMembers ?? 5;
     this.review = deps.review;
     this.runtimeEvents = deps.runtimeEvents;
+    this.workspace = deps.workspace;
   }
 
   /** Resolve a team or fail with the typed error. */
@@ -160,6 +169,48 @@ export class AgentTeamsService {
   async ready(): Promise<void> {
     await this.store.ready();
     this.readyFlag = true;
+  }
+
+  private requireWorkspaceManager(): WorkspaceManager {
+    if (this.workspace === undefined) throw teamError('STORAGE_UNAVAILABLE', 'workspace coordination is not mounted');
+    return this.workspace;
+  }
+
+  private workspaceActor(teamId: string, sessionId: SessionId): WorkspaceActor {
+    return { teamId, sessionId };
+  }
+
+  async createWorkspace(input: Omit<CreateWorkspaceInput, 'sessionId'>, actor: SessionId): Promise<Awaited<ReturnType<WorkspaceManager['create']>>> {
+    const manager = this.requireWorkspaceManager();
+    const team = await this.team(input.teamId as string);
+    await this.assertActor(team.id, actor);
+    await this.assertActive(team);
+    return manager.create({ ...input, sessionId: actor });
+  }
+
+  async listWorkspaces(teamId: string, actor: SessionId): Promise<Awaited<ReturnType<WorkspaceManager['list']>>> {
+    const manager = this.requireWorkspaceManager();
+    return manager.list(teamId, this.workspaceActor(teamId, actor));
+  }
+
+  async getWorkspace(workspaceId: string, teamId: string, actor: SessionId): Promise<Awaited<ReturnType<WorkspaceManager['get']>>> {
+    const manager = this.requireWorkspaceManager();
+    return manager.get(workspaceId, this.workspaceActor(teamId, actor));
+  }
+
+  async heartbeatWorkspace(workspaceId: string, teamId: string, actor: SessionId): Promise<Awaited<ReturnType<WorkspaceManager['heartbeat']>>> {
+    const manager = this.requireWorkspaceManager();
+    return manager.heartbeat(workspaceId, this.workspaceActor(teamId, actor));
+  }
+
+  async releaseWorkspace(workspaceId: string, teamId: string, actor: SessionId): Promise<Awaited<ReturnType<WorkspaceManager['releaseWorkspace']>>> {
+    const manager = this.requireWorkspaceManager();
+    return manager.releaseWorkspace(workspaceId, this.workspaceActor(teamId, actor));
+  }
+
+  async handoffWorkspace(workspaceId: string, teamId: string, actor: SessionId, target: { sessionId: SessionId; memberId: string }): Promise<Awaited<ReturnType<WorkspaceManager['handoffWorkspace']>>> {
+    const manager = this.requireWorkspaceManager();
+    return manager.handoffWorkspace(workspaceId, this.workspaceActor(teamId, actor), target);
   }
 
   // ── teams ──────────────────────────────────────────────────────────────────
@@ -1019,12 +1070,38 @@ export class AgentTeamsService {
   async claimFiles(input: {
     teamId: string;
     ownerSessionId: SessionId;
+    workspaceId?: string;
     patterns: string[];
     purpose: string;
   }): Promise<FileClaim[]> {
     const { team } = await this.assertActor(input.teamId, input.ownerSessionId);
     await this.assertActive(team);
     await this.assertImplementationReady(input.teamId, input.ownerSessionId);
+    if (this.workspace !== undefined) {
+      try {
+        const claims = await this.workspace.claimFiles({
+          teamId: input.teamId,
+          workspaceId: input.workspaceId,
+          actor: this.workspaceActor(input.teamId, input.ownerSessionId),
+          patterns: input.patterns,
+          purpose: input.purpose,
+        });
+        for (const claim of claims) this.emit(events.FILE_CLAIMED, { claim });
+        return claims;
+      } catch (error) {
+        if (error !== null && typeof error === 'object' && 'code' in error && (error as { code?: unknown }).code === 'FILE_CLAIM_CONFLICT') {
+          const details = (error as { details?: Record<string, unknown> }).details ?? {};
+          this.emit(events.FILE_CONFLICT, {
+            teamId: input.teamId,
+            pattern: String(details.pattern ?? input.patterns[0] ?? ''),
+            attemptedBy: input.ownerSessionId,
+            ownerSessionId: String(details.ownerSessionId ?? ''),
+            conflictingClaim: String(details.conflictingClaim ?? ''),
+          });
+        }
+        throw error;
+      }
+    }
     return this.withTeamMutation(input.teamId, async () => {
       const owner = await this.memberBySession(input.teamId, input.ownerSessionId);
       const normalized = input.patterns.map((p) => this.normalizePattern(p));
@@ -1062,6 +1139,16 @@ export class AgentTeamsService {
   }
 
   async releaseFiles(claimIds: string[], actor: SessionId): Promise<void> {
+    if (this.workspace !== undefined) {
+      const claims = await this.store.list('file_claims', (claim) => claimIds.includes(claim.id));
+      const teamIds = [...new Set(claims.map((claim) => claim.teamId))];
+      if (teamIds.length > 1) throw teamError('INVALID_INPUT', 'file claims must belong to one team per release operation', { claimIds, teamIds });
+      if (teamIds.length === 1) {
+        const released = await this.workspace.releaseFiles(teamIds[0]!, claimIds, { teamId: teamIds[0]!, sessionId: actor });
+        for (const claim of released) this.emit(events.FILE_RELEASED, { claim });
+        return;
+      }
+    }
     for (const claimId of claimIds) {
       const claim = await this.store.get('file_claims', claimId);
       if (claim === undefined) throw teamError('FILE_CLAIM_NOT_FOUND', `claim ${claimId} not found`, { claimId });
@@ -1077,6 +1164,30 @@ export class AgentTeamsService {
   async listFileClaims(teamId: string, actor: SessionId): Promise<FileClaim[]> {
     await this.assertActor(teamId, actor);
     return this.store.list('file_claims', (c) => c.teamId === teamId);
+  }
+
+  async handoffFile(input: {
+    teamId: string;
+    claimId: string;
+    toSessionId: SessionId;
+    toMemberId?: string;
+    purpose?: string;
+  }, actor: SessionId): Promise<FileClaim> {
+    const manager = this.requireWorkspaceManager();
+    const claim = await this.store.get('file_claims', input.claimId);
+    if (claim === undefined || claim.teamId !== input.teamId) {
+      throw teamError('FILE_CLAIM_NOT_FOUND', `file claim ${input.claimId} not found`, { claimId: input.claimId, teamId: input.teamId });
+    }
+    const updated = await manager.handoffFile({
+      teamId: input.teamId,
+      claimId: input.claimId,
+      fromSessionId: actor,
+      toSessionId: input.toSessionId,
+      toMemberId: input.toMemberId,
+      purpose: input.purpose,
+    });
+    this.emit(events.FILE_RELEASED, { claim: { ...updated, handoff: true } });
+    return updated;
   }
 
   // ── review findings ────────────────────────────────────────────────────────

@@ -10,6 +10,7 @@ import type { TeamEventSink, TeamRuntimeAdapter } from './types.ts';
 import type { ReviewDomain } from './review.ts';
 import type { RuntimeEventLog } from './runtime-events.ts';
 import type { CreateFindingInput, CreateReviewRequestInput, ReviewSubmission } from './review.ts';
+import type { CreateWorkspaceInput, WorkspaceManager } from './workspace.ts';
 export interface ServiceDeps {
     store: TeamStore;
     /** Optional harness runtime adapter; absent in no-model tests/simulation. */
@@ -24,6 +25,8 @@ export interface ServiceDeps {
     review?: ReviewDomain;
     /** Optional durable audit projection; live sink remains the UI notification path. */
     runtimeEvents?: RuntimeEventLog;
+    /** Optional workspace/lease authority used by the production Harness instance. */
+    workspace?: WorkspaceManager;
 }
 export declare class AgentTeamsService {
     readonly store: TeamStore;
@@ -33,6 +36,7 @@ export declare class AgentTeamsService {
     readonly maxActiveMembers: number;
     readonly review?: ReviewDomain;
     readonly runtimeEvents?: RuntimeEventLog;
+    readonly workspace?: WorkspaceManager;
     private readyFlag;
     /** Serializes multi-record invariants within one plugin process. */
     private readonly teamMutationQueues;
@@ -46,6 +50,17 @@ export declare class AgentTeamsService {
     private requireLead;
     private withTeamMutation;
     ready(): Promise<void>;
+    private requireWorkspaceManager;
+    private workspaceActor;
+    createWorkspace(input: Omit<CreateWorkspaceInput, 'sessionId'>, actor: SessionId): Promise<Awaited<ReturnType<WorkspaceManager['create']>>>;
+    listWorkspaces(teamId: string, actor: SessionId): Promise<Awaited<ReturnType<WorkspaceManager['list']>>>;
+    getWorkspace(workspaceId: string, teamId: string, actor: SessionId): Promise<Awaited<ReturnType<WorkspaceManager['get']>>>;
+    heartbeatWorkspace(workspaceId: string, teamId: string, actor: SessionId): Promise<Awaited<ReturnType<WorkspaceManager['heartbeat']>>>;
+    releaseWorkspace(workspaceId: string, teamId: string, actor: SessionId): Promise<Awaited<ReturnType<WorkspaceManager['releaseWorkspace']>>>;
+    handoffWorkspace(workspaceId: string, teamId: string, actor: SessionId, target: {
+        sessionId: SessionId;
+        memberId: string;
+    }): Promise<Awaited<ReturnType<WorkspaceManager['handoffWorkspace']>>>;
     createTeam(input: {
         name: string;
         goal: string;
@@ -191,11 +206,19 @@ export declare class AgentTeamsService {
     claimFiles(input: {
         teamId: string;
         ownerSessionId: SessionId;
+        workspaceId?: string;
         patterns: string[];
         purpose: string;
     }): Promise<FileClaim[]>;
     releaseFiles(claimIds: string[], actor: SessionId): Promise<void>;
     listFileClaims(teamId: string, actor: SessionId): Promise<FileClaim[]>;
+    handoffFile(input: {
+        teamId: string;
+        claimId: string;
+        toSessionId: SessionId;
+        toMemberId?: string;
+        purpose?: string;
+    }, actor: SessionId): Promise<FileClaim>;
     addFinding(input: {
         teamId: string;
         authorSessionId: SessionId;
