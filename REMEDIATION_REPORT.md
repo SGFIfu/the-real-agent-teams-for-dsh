@@ -223,3 +223,23 @@ The latest change set adds provider/model separation, real-session-first registr
 Real Team `team_00000001_45752fca` used four DeepSeek V4 Flash child sessions with native `spawn` and proved plan reject/revise/approve, same-session T3→T5 self-claim, native peer delivery, real file conflict/handoff, and restart persistence. The next Lead turn stopped on the real provider error `402 Insufficient Balance` / `QUOTA`; Tester T4, Reviewer, fix/re-review, final validation and successful completion were not executed. Latest decision: **PARTIALLY IMPROVED**, not QUALIFIED.
 
 Full evidence: [HARNESS_RUNTIME_RELIABILITY_IMPROVEMENT_REPORT.md](HARNESS_RUNTIME_RELIABILITY_IMPROVEMENT_REPORT.md).
+
+## Capability Enforcement Addendum — 2026-08-17
+
+The bounded capability policy is now a real Harness tool-pipeline guard. It
+classifies generic repository/process/Git calls, checks durable member identity,
+capabilities, and file claims, records `CAPABILITY_DECISION`, and denies
+unapproved shell commands, shell file mutation, protected Git actions, and
+unclaimed writes. Reviewer members can run approved verification commands but
+cannot use the generic write path.
+
+Focused regression coverage is green: **112/112 tests across 21 suites**.
+Typecheck, build, client bundle, dynamic host build, and 47-tool preflight also
+pass. The change was developed on `feature/runtime-capability-guard` and
+merged as `28bac54`.
+
+This improves the runtime boundary, but does not change the real-provider
+acceptance boundary: after the rebuilt Harness restart, the existing P0 Team
+continuation again stopped at `402 Insufficient Balance` / `QUOTA`. Tester
+T4, independent Reviewer T6, fix/re-review, T7, and successful final
+completion remain unverified. Final judgment remains **PARTIALLY IMPROVED**.

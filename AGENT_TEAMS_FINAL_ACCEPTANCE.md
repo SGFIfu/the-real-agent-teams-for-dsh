@@ -203,3 +203,18 @@ dsh-agent-teams is now a genuine coordination implementation with real Team stat
 Latest Team: `team_00000001_45752fca`. Four real DeepSeek V4 Flash child sessions using native `spawn` proved provider/model separation, plan reject/revise/approve, native peer delivery, real file conflict/handoff, and Frontend T3 → same-session T5 self-claim. A real Harness restart preserved the Team, members, tasks, plans, messages, claims and progress; the UI reopened the correct Team and privacy-safe Inspector.
 
 The next Lead control turn returned the real provider error `402 Insufficient Balance` / `QUOTA`. Tester T4, independent Reviewer, fix/re-review, final validation and final completion were not executed. The latest release judgment is **PARTIALLY IMPROVED**, not QUALIFIED. Full evidence is in `HARNESS_RUNTIME_RELIABILITY_IMPROVEMENT_REPORT.md`.
+
+## P0 Capability Enforcement Addendum — 2026-08-17
+
+The repaired branch now installs a `tools/pre-execute` capability guard for
+real teammate sessions. Local evidence: 112/112 tests pass across 21 suites;
+owned/unowned writes, Reviewer verification versus mutation, arbitrary shell,
+shell file mutation, and protected Git actions are covered. Typecheck, build,
+client registration, dynamic host preflight, and the rebuilt Harness boot all
+pass. Merge commit: `28bac54`.
+
+This is not a new real-agent PASS: the persisted P0 Dogfood Team's next
+continuation still returned the real Provider error `402 Insufficient Balance`
+(`QUOTA`). Tester, Reviewer/fix/re-review, final validation, and successful
+`team_complete` remain unexecuted. The acceptance status therefore remains
+**PARTIALLY IMPROVED / NOT QUALIFIED**.

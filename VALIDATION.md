@@ -147,3 +147,17 @@ The Lead's next control turn returned the real provider error `402 Insufficient 
 ### Dogfood Git observation
 
 The real dogfood repository retained the initial scaffold commit `ee77cba` plus uncommitted worker files (`server.js`, `lib/`, `shared/`, `public/`, `docs/`). No worker branch/focused commit was observed before the provider quota stop; this is recorded as a workflow finding rather than converted into a false PASS.
+
+## Capability Enforcement Addendum — 2026-08-17
+
+| Check | Result | Evidence |
+|---|---|---|
+| Capability tool-boundary guard | PASS | `tools/pre-execute` calls the service policy for real member sessions |
+| Owned write enforcement | PASS | focused tests: owned path allowed, unclaimed path denied, Reviewer write denied |
+| Process/Git command boundary | PASS | focused tests deny shell mutation, arbitrary command, and protected Git actions; approved test/build/read commands remain allowed |
+| Capability audit events | PASS | `CAPABILITY_DECISION` includes team/member/session, capability, command/path, timestamp and allow/deny |
+| Regression suite after merge | PASS | 112/112 tests, 21 suites; typecheck/build/client/dynamic preflight all PASS |
+| Real post-guard child action | NOT VERIFIED | persisted real Team continuation again returned `402 Insufficient Balance` / `QUOTA` before a new funded child tool call |
+
+Implementation branch: `feature/runtime-capability-guard` → merge commit
+`28bac54` on `integration/runtime-reliability-v1`.

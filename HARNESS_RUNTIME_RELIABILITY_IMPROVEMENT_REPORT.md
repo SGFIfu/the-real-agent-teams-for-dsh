@@ -131,3 +131,29 @@ After a real Harness process restart, `/agent-teams/teams` returned five Teams, 
 ## Release judgment
 
 **PARTIALLY IMPROVED.** The implementation is no longer the 63-point coordination shell: the local invariants are stronger and the real run demonstrated genuine child sessions, native delivery, plan governance, file conflict handling, persistent session reuse, and self-claiming. It is still not a Qualified release because the real Tester/Reviewer/fix/re-review/final-completion chain was stopped by provider quota, and the wake-up path needs one funded end-to-end confirmation.
+
+## Capability Enforcement Addendum — 2026-08-17
+
+The capability policy is now enforced at the Harness `tools/pre-execute`
+boundary, not only stored as member metadata. `AgentTeamsService` classifies
+repository, process, and Git tool calls, checks the calling real member's
+durable capability set and owned file claims, emits auditable
+`CAPABILITY_DECISION` events, and denies unapproved shell commands, shell file
+mutation, protected Git actions, unclaimed writes, and Reviewer writes.
+
+The focused feature branch `feature/runtime-capability-guard` was merged into
+`integration/runtime-reliability-v1` as `28bac54`. New automated coverage
+raises the local suite to **112/112 tests across 21 suites**, including owned
+write allowed/unclaimed write denied, Reviewer verification allowed/mutation
+denied, and shell/Git boundary denials.
+
+The rebuilt live Harness was restarted on 2026-08-17; the Teams UI loaded with
+no new plugin/module errors and the persisted P0 Team remained available. This
+restart did not create a new funded child turn. The existing real Team still
+has T4 pending, T5 in progress, Reviewer T6 pending, and final T7 pending; the
+Lead continuation again returned `402 Insufficient Balance` / `QUOTA`. The
+real Reviewer and final-completion gates therefore remain **NOT VERIFIED**.
+
+Updated local gates after the merge: typecheck PASS, build PASS, 112/112 tests
+PASS, client bundle PASS, dynamic host preflight PASS with 47 tools, and clean
+worktree.
