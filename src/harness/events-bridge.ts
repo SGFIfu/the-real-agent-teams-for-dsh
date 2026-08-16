@@ -44,12 +44,16 @@ export function bridgeNativeEvents(deps: BridgeDeps): Array<() => void> {
   const disposers: Array<() => void> = [];
 
   const memberOf = async (sessionId: string): Promise<{ id: string; teamId: string } | undefined> => {
+    let found: { id: string; teamId: string } | undefined;
     for (const team of await deps.service.listTeams()) {
       if (team.leadSessionId === sessionId) continue;
       const member = await deps.service.memberBySession(team.id, sessionId);
-      if (member !== undefined) return member;
+      if (member !== undefined) {
+        if (found !== undefined && found.teamId !== member.teamId) return undefined;
+        found = member;
+      }
     }
-    return undefined;
+    return found;
   };
 
   disposers.push(
@@ -60,7 +64,7 @@ export function bridgeNativeEvents(deps: BridgeDeps): Array<() => void> {
         if (member === undefined) return;
         const patch = payload.status === 'running' ? { status: 'working' as const } : { status: 'idle' as const };
         await deps.service.updateMemberFromRuntime(member.id, patch);
-      })();
+      })().catch(() => undefined);
     }),
   );
 
@@ -70,8 +74,13 @@ export function bridgeNativeEvents(deps: BridgeDeps): Array<() => void> {
         const sessionId = info.id;
         const member = await memberOf(sessionId);
         if (member === undefined) return;
-        await deps.service.updateMemberFromRuntime(member.id, { status: 'stopped' });
-      })();
+        // `subagent/end` closes one run/activation epoch, not a continuable
+        // teammate session. The continuation manager owns child disposal;
+        // normal completion returns the teammate to idle and the service
+        // preserves working/blocked when it still owns a task.
+        const status = info.stopReason === 'error' || info.stopReason === 'aborted' ? 'failed' as const : 'idle' as const;
+        await deps.service.updateMemberFromRuntime(member.id, { status });
+      })().catch(() => undefined);
     }),
   );
 
