@@ -121,8 +121,8 @@ Upgrade the existing Team runtime with explicit workspace/Git responsibility tra
 ### Phases
 
 - [completed] 0. Repository audit and baseline command capture
-- [in_progress] 1. Feature backlog, consolidation, target architecture, interface freeze
-- [pending] 2. Integration branch and isolated worktree layout
+- [completed] 1. Feature backlog, consolidation, target architecture, interface freeze
+- [in_progress] 2. Integration branch and isolated worktree layout
 - [pending] 3. Shared core contracts and workspace/Git domain
 - [pending] 4. Runtime events, audit trail, and Service integration
 - [pending] 5. Feature-specific tests and documentation

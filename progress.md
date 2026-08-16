@@ -79,3 +79,9 @@
 - After selecting Backend, the scoped Inspector showed `97 public events · open`, typed tool calls/results, and no Think/reasoning row. Completion HTTP probe returned 400 `TEAM_NOT_COMPLETABLE` with exact incomplete task IDs.
 - Native idle-event handling was compiled and tested so a held task remains semantically `working/blocked`; reassignment and explicit blocking synchronize the corresponding member state.
 - Hash routing now reacts to browser navigation: a clean tab showed `Team not found: team_missing` with no stale Tiny Notes, then returned to the correct selected Team and graph.
+
+## Runtime Upgrade v2 (2026-08-16)
+
+- Runtime Upgrade v2 audit recorded real baseline failures: typecheck/build fail because Harness peer type packages are absent; 73/73 tests pass; lint is not configured.
+- Created `integration/agent-teams-v2` and committed the v2 backlog, consolidated design, target architecture, interface contract v1, and agent/file ownership manifests.
+- User explicitly requested Codex subagents; the next implementation lanes will be delegated through the built-in multi-agent tool with disjoint write scopes.
