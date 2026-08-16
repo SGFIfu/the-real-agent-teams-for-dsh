@@ -12,6 +12,12 @@ declare const taskIdBrand: unique symbol;
 declare const messageIdBrand: unique symbol;
 declare const planIdBrand: unique symbol;
 declare const fileClaimIdBrand: unique symbol;
+declare const workspaceIdBrand: unique symbol;
+declare const gitWorkspaceIdBrand: unique symbol;
+declare const commitIdBrand: unique symbol;
+declare const reviewRequestIdBrand: unique symbol;
+declare const reviewResultIdBrand: unique symbol;
+declare const runtimeEventIdBrand: unique symbol;
 export type TeamId = string & {
     readonly [teamIdBrand]: true;
 };
@@ -29,6 +35,24 @@ export type PlanId = string & {
 };
 export type FileClaimId = string & {
     readonly [fileClaimIdBrand]: true;
+};
+export type WorkspaceId = string & {
+    readonly [workspaceIdBrand]: true;
+};
+export type GitWorkspaceId = string & {
+    readonly [gitWorkspaceIdBrand]: true;
+};
+export type CommitId = string & {
+    readonly [commitIdBrand]: true;
+};
+export type ReviewRequestId = string & {
+    readonly [reviewRequestIdBrand]: true;
+};
+export type ReviewResultId = string & {
+    readonly [reviewResultIdBrand]: true;
+};
+export type RuntimeEventId = string & {
+    readonly [runtimeEventIdBrand]: true;
 };
 /** Harness session id (opaque string; the harness owns its identity space). */
 export type SessionId = string;
@@ -139,6 +163,86 @@ export interface ReviewFinding {
     state: FindingState;
     createdAt: number;
     resolvedAt?: number;
+}
+export type WorkspaceStatus = 'requested' | 'creating' | 'ready' | 'dirty' | 'clean' | 'review' | 'merged' | 'abandoned' | 'recoverable';
+export interface TeamWorkspace {
+    id: WorkspaceId;
+    teamId: TeamId;
+    memberId?: TeamMemberId;
+    taskId?: TaskId;
+    repositoryRoot: string;
+    branch: string;
+    worktreePath: string;
+    status: WorkspaceStatus;
+    leaseId: string;
+    createdAt: number;
+    updatedAt: number;
+    lastHeartbeatAt: number;
+}
+/** Short name retained for callers that use the domain noun without Team prefix. */
+export type Workspace = TeamWorkspace;
+export type GitWorkspaceStatus = Exclude<WorkspaceStatus, 'requested' | 'review'>;
+export interface GitWorkspace {
+    id: GitWorkspaceId;
+    workspaceId: WorkspaceId;
+    repositoryRoot: string;
+    branch: string;
+    baseRef: string;
+    worktreePath: string;
+    head?: string;
+    changedFiles: string[];
+    status: GitWorkspaceStatus;
+    createdAt: number;
+    updatedAt: number;
+}
+export interface WorkspaceCommit {
+    id: CommitId;
+    teamId: TeamId;
+    workspaceId: WorkspaceId;
+    memberId: TeamMemberId;
+    taskId?: TaskId;
+    hash: string;
+    subject: string;
+    files: string[];
+    createdAt: number;
+}
+export type ReviewRequestStatus = 'requested' | 'in_review' | 'changes_requested' | 'approved' | 'rejected';
+export interface ReviewRequest {
+    id: ReviewRequestId;
+    teamId: TeamId;
+    taskId: TaskId;
+    workspaceId: WorkspaceId;
+    requestedBy: SessionId;
+    reviewerMemberId: TeamMemberId;
+    baseRef: string;
+    headRef: string;
+    status: ReviewRequestStatus;
+    createdAt: number;
+    updatedAt: number;
+}
+export type ReviewVerdict = 'approved' | 'changes_requested' | 'rejected';
+export interface ReviewResult {
+    id: ReviewResultId;
+    requestId: ReviewRequestId;
+    reviewerMemberId: TeamMemberId;
+    verdict: ReviewVerdict;
+    evidence: string[];
+    findingIds: string[];
+    createdAt: number;
+}
+export type RuntimeEventVisibility = 'public' | 'internal';
+export interface RuntimeEvent {
+    id: RuntimeEventId;
+    teamId: TeamId;
+    sequence: number;
+    name: string;
+    actorSessionId?: SessionId;
+    targetSessionId?: SessionId;
+    visibility: RuntimeEventVisibility;
+    payloadVersion: 1;
+    dedupeKey?: string;
+    payload: Record<string, unknown>;
+    createdAt: number;
 }
 export interface TeamSnapshot {
     team: AgentTeam;

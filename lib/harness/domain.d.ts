@@ -92,5 +92,78 @@ export declare const agentTeamsDomain: {
             responsibleMemberId?: string | undefined;
             resolvedAt?: number | undefined;
         }>;
+        workspaces: import("@deepseek-ai/dsh-storage-domain").DomainTableSpec<string, {
+            id: string;
+            teamId: string;
+            repositoryRoot: string;
+            branch: string;
+            worktreePath: string;
+            status: "review" | "requested" | "creating" | "ready" | "dirty" | "clean" | "merged" | "abandoned" | "recoverable";
+            leaseId: string;
+            createdAt: number;
+            updatedAt: number;
+            lastHeartbeatAt: number;
+            memberId?: string | undefined;
+            taskId?: string | undefined;
+        }>;
+        git_workspaces: import("@deepseek-ai/dsh-storage-domain").DomainTableSpec<string, {
+            id: string;
+            workspaceId: string;
+            repositoryRoot: string;
+            branch: string;
+            baseRef: string;
+            worktreePath: string;
+            changedFiles: string[];
+            status: "creating" | "ready" | "dirty" | "clean" | "merged" | "abandoned" | "recoverable";
+            createdAt: number;
+            updatedAt: number;
+            head?: string | undefined;
+        }>;
+        commits: import("@deepseek-ai/dsh-storage-domain").DomainTableSpec<string, {
+            id: string;
+            teamId: string;
+            workspaceId: string;
+            memberId: string;
+            hash: string;
+            subject: string;
+            files: string[];
+            createdAt: number;
+            taskId?: string | undefined;
+        }>;
+        review_requests: import("@deepseek-ai/dsh-storage-domain").DomainTableSpec<string, {
+            id: string;
+            teamId: string;
+            taskId: string;
+            workspaceId: string;
+            requestedBy: string;
+            reviewerMemberId: string;
+            baseRef: string;
+            headRef: string;
+            status: "approved" | "rejected" | "requested" | "in_review" | "changes_requested";
+            createdAt: number;
+            updatedAt: number;
+        }>;
+        review_results: import("@deepseek-ai/dsh-storage-domain").DomainTableSpec<string, {
+            id: string;
+            requestId: string;
+            reviewerMemberId: string;
+            verdict: "approved" | "rejected" | "changes_requested";
+            evidence: string[];
+            findingIds: string[];
+            createdAt: number;
+        }>;
+        runtime_events: import("@deepseek-ai/dsh-storage-domain").DomainTableSpec<string, {
+            id: string;
+            teamId: string;
+            sequence: number;
+            name: string;
+            visibility: "public" | "internal";
+            payloadVersion: 1;
+            payload: Record<string, unknown>;
+            createdAt: number;
+            actorSessionId?: string | undefined;
+            targetSessionId?: string | undefined;
+            dedupeKey?: string | undefined;
+        }>;
     };
 };

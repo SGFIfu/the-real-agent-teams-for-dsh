@@ -25,12 +25,16 @@ export declare class AgentTeamsService {
     readonly defaultProvider: string;
     readonly maxActiveMembers: number;
     private readyFlag;
+    /** Serializes multi-record invariants within one plugin process. */
+    private readonly teamMutationQueues;
     constructor(deps: ServiceDeps);
     /** Resolve a team or fail with the typed error. */
     private team;
     private emit;
     private assertActor;
     private assertActive;
+    private requireLead;
+    private withTeamMutation;
     ready(): Promise<void>;
     createTeam(input: {
         name: string;
@@ -39,6 +43,7 @@ export declare class AgentTeamsService {
         workspaceId: string;
     }): Promise<AgentTeam>;
     getTeam(teamId: string): Promise<AgentTeam>;
+    getTeamForActor(teamId: string, actor: SessionId): Promise<AgentTeam>;
     listTeams(actorSessionId?: SessionId): Promise<AgentTeam[]>;
     pauseTeam(teamId: string, actor: SessionId): Promise<AgentTeam>;
     resumeTeam(teamId: string, actor: SessionId): Promise<AgentTeam>;
@@ -59,6 +64,9 @@ export declare class AgentTeamsService {
         capabilities?: string[];
         actor: SessionId;
     }): Promise<TeamMember>;
+    /** Bind the real Harness child identity after native spawn succeeds. */
+    bindMemberSession(memberId: string, childSessionId: SessionId, actor: SessionId): Promise<TeamMember>;
+    markMemberSpawnFailed(memberId: string, actor: SessionId): Promise<TeamMember>;
     getMember(memberId: string): Promise<TeamMember>;
     memberBySession(teamId: string, sessionId: SessionId): Promise<TeamMember | undefined>;
     listMembers(teamId: string, actor: SessionId): Promise<TeamMember[]>;
