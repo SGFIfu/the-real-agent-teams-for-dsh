@@ -158,6 +158,26 @@ export function apply(ctx: Context, config: Config): void {
     disposers.push(...bridgeNativeEvents({ ctx, service }));
     console.log('[agent-teams] event bridge registered');
 
+    // Enforce the bounded capability policy at the Harness tool pipeline too.
+    // Team_* tools retain their own service-level authorization; this hook
+    // covers generic repo/process tools so a teammate's persisted capability
+    // record is an actual deny boundary rather than prompt-only metadata.
+    disposers.push(ctx.on('tools/pre-execute', async (execution, next) => {
+      const actor = execution.agent?.id;
+      if (actor === undefined) return next();
+      const decision = await service.authorizeToolCapability({
+        sessionId: actor,
+        toolName: execution.name,
+        arguments: execution.arguments,
+      });
+      if (decision.allowed) return next();
+      return {
+        kind: 'deny',
+        reason: `CAPABILITY_DENIED: ${decision.reason ?? 'capability policy rejected this tool call'}`,
+      };
+    }));
+    console.log('[agent-teams] capability guard registered');
+
     const systemPrompt = ctx.get('systemPrompt') as { section(section: PromptSection): () => void } | undefined;
     if (systemPrompt !== undefined) disposers.push(systemPrompt.section(promptSection()));
     console.log('[agent-teams] prompt section registered');

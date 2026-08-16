@@ -1,6 +1,7 @@
 # RUNTIME RELIABILITY DESIGN
 
-Status: pre-implementation design for P0 reliability hardening.
+Status: implemented contract for P0 reliability hardening; the remaining
+end-to-end qualification gate is a funded real-provider dogfood run.
 
 Scope: provider/model separation, persistent worker wake-up, task eligibility,
 bounded agent capabilities, pending-session message delivery, and the
@@ -85,8 +86,15 @@ Observed in the current source:
   and model/agentOptions before calling ctx.subagents.startContinuable().
 - TeamRuntimeAdapter has no command execution or capability audit seam.
 
-Root cause: the host runtime owns tools and processes, but the plugin does not
+Root cause: the host runtime owns tools and processes, but the plugin did not
 provide a bounded team-member policy or a host hook for auditable decisions.
+
+Implemented boundary: `AgentTeamsService.authorizeToolCapability()` classifies
+repository/process/Git tool calls, checks the durable member capability and
+file-claim state, emits `CAPABILITY_DECISION`, and the host plugin installs it
+on `tools/pre-execute`. Shell file mutation and protected Git actions are
+denied even when the member has the broad implementation capability. Typed
+`team_*` operations retain their own service-level authorization.
 
 ### REPRO-05 — Pending target message becomes permanently failed
 
@@ -188,10 +196,10 @@ Denied by default:
 - secret access;
 - force release or cross-team mutation.
 
-Every host execution decision carries agent/member/session, team, command or
-tool, workspace, capability, timestamp, and allow/deny result. The native
-tool restriction is passed through in both static and generated dynamic
-runtime paths; the policy module remains host-independent and testable.
+Every classified host execution decision carries agent/member/session, team,
+command or tool, workspace/path, capability, timestamp, and allow/deny result.
+The policy module remains host-independent and testable; the host hook is the
+enforcement boundary for the current Harness tool registry.
 
 ### MessageDelivery
 
@@ -255,4 +263,3 @@ capabilities, and all verification actions are independently auditable.
 Atomic claim, dependency enforcement/cycle protection, persistence, client
 registration, plan guard, review gate, file conflict detection, and completion
 guard remain green.
-

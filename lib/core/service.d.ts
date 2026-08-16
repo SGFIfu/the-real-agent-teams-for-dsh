@@ -11,6 +11,7 @@ import type { ReviewDomain } from './review.ts';
 import type { RuntimeEventLog } from './runtime-events.ts';
 import type { CreateFindingInput, CreateReviewRequestInput, ReviewSubmission } from './review.ts';
 import type { CreateWorkspaceInput, WorkspaceManager } from './workspace.ts';
+import { type ToolCapabilityDecision } from './capabilities.ts';
 export interface ServiceDeps {
     store: TeamStore;
     /** Optional harness runtime adapter; absent in no-model tests/simulation. */
@@ -112,6 +113,19 @@ export declare class AgentTeamsService {
         command?: string;
         workspace?: string;
     }): Promise<void>;
+    /**
+     * Enforce the bounded capability policy at the host tool boundary.
+     *
+     * Team coordination tools keep their own typed authorization rules. This
+     * guard covers the host's repository/process tools when a real teammate is
+     * the caller, so a model cannot turn a descriptive capability record into an
+     * unrestricted shell or an unowned file write.
+     */
+    authorizeToolCapability(input: {
+        sessionId: SessionId;
+        toolName: string;
+        arguments: unknown;
+    }): Promise<ToolCapabilityDecision>;
     removeMember(memberId: string, actor: SessionId): Promise<void>;
     assignTask(taskId: string, memberId: string, actor: SessionId): Promise<TeamTask>;
     createTask(input: {

@@ -13,6 +13,7 @@ await import('../lib/core/dependencies.test.js');
 await import('../lib/core/messaging.test.js');
 await import('../lib/core/message-retry.test.js');
 await import('../lib/core/reliability.test.js');
+await import('../lib/core/capabilities.test.js');
 await import('../lib/core/plans.test.js');
 await import('../lib/core/file-claims.test.js');
 await import('../lib/core/persistence.test.js');
