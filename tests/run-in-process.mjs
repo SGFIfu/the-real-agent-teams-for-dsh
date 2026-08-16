@@ -6,6 +6,7 @@
  */
 await import('../lib/core/task.test.js');
 await import('../lib/core/authorization.test.js');
+await import('../lib/core/contracts.test.js');
 await import('../lib/core/runtime-events.test.js');
 await import('../lib/core/concurrency.test.js');
 await import('../lib/core/dependencies.test.js');
