@@ -7,7 +7,21 @@
 import type { Domain, DomainSpec } from '@deepseek-ai/dsh-storage-domain';
 import type { TeamStore, TableName, RecordOf, UpdateResult } from '../core/store.ts';
 
-const TABLE_NAMES: readonly TableName[] = ['teams', 'members', 'tasks', 'messages', 'plans', 'file_claims', 'findings'];
+const TABLE_NAMES: readonly TableName[] = [
+  'teams',
+  'members',
+  'tasks',
+  'messages',
+  'plans',
+  'file_claims',
+  'findings',
+  'workspaces',
+  'git_workspaces',
+  'commits',
+  'review_requests',
+  'review_results',
+  'runtime_events',
+];
 
 export class DomainStore implements TeamStore {
   constructor(private readonly domain: Domain<DomainSpec>) {}

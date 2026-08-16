@@ -65,7 +65,7 @@ This backlog is derived from the local Agent Teams acceptance records and the so
 - Priority: P1
 - Complexity: VERY HIGH
 - Risk: HIGH
-- Dependencies: AT2-001, AT2-002, AT2-009
+- Dependencies: AT2-001, AT2-002, AT2-009a
 - Likely Modules: new `src/core/workspace.ts`, new `src/harness/git-workspace.ts`, tests
 - Expected User Value: Parallel Agents can work without overwriting each other.
 - Expected Engineering Value: Branch correctness and cleanup become testable.
@@ -134,7 +134,7 @@ This backlog is derived from the local Agent Teams acceptance records and the so
 - Expected User Value: Teammates continue work and message each other directly.
 - Expected Engineering Value: Removes lead relay as a hidden bottleneck.
 
-### AT2-009 — Security and Caller Context
+### AT2-009a — Security and Caller Context Preflight
 
 - Feature Name: Authenticated, scoped Web mutations and safe Git operations
 - Source Project: OpenCode permission inheritance; Codex approval boundaries; existing dsh actor checks
@@ -145,10 +145,26 @@ This backlog is derived from the local Agent Teams acceptance records and the so
 - Priority: P0
 - Complexity: HIGH
 - Risk: HIGH
-- Dependencies: AT2-002, AT2-004
-- Likely Modules: `src/harness/command-route.ts`, `src/harness/git-workspace.ts`, `src/core/service.ts`, tests
+- Dependencies: AT2-002
+- Likely Modules: `src/harness/command-route.ts`, `src/core/service.ts`, tests
 - Expected User Value: Human controls cannot affect another Team or arbitrary Session.
-- Expected Engineering Value: Prevents impersonation, path traversal, and shell escape.
+- Expected Engineering Value: Prevents impersonation and unsafe resource access before Git operations are exposed.
+
+### AT2-009b — Git Adapter Hardening
+
+- Feature Name: Adapter-specific authorization and command/path hardening
+- Source Project: OpenCode worktree permissions; existing Harness runtime boundaries
+- Problem: Git/worktree operations require checks that only exist after the physical adapter is present.
+- Design: Validate fixed Git argv, repository-root binding, worktree ownership, branch names, symlink/escape behavior, and cleanup permissions in the adapter boundary.
+- Current Status: Backlog item split from AT2-009 to remove the AT2-004 ↔ AT2-009 dependency cycle.
+- COPY/ADAPT: Adapt OpenCode's scoped worktree model to the frozen `GitWorkspaceAdapter` interface.
+- Priority: P0
+- Complexity: HIGH
+- Risk: HIGH
+- Dependencies: AT2-004, AT2-009a
+- Likely Modules: `src/harness/git-workspace.ts`, security tests
+- Expected User Value: Physical worktrees cannot escape their Team or repository scope.
+- Expected Engineering Value: Git-specific attack paths are tested at the actual execution boundary.
 
 ### AT2-010 — Public Observability Projection
 
@@ -202,7 +218,7 @@ This backlog is derived from the local Agent Teams acceptance records and the so
 
 | Priority | Features |
 |---|---|
-| P0 | AT2-001, AT2-002, AT2-003, AT2-006, AT2-007, AT2-008, AT2-009 |
+| P0 | AT2-001, AT2-002, AT2-003, AT2-006, AT2-007, AT2-008, AT2-009a, AT2-009b |
 | P1 | AT2-004, AT2-005, AT2-010, AT2-011, AT2-012 |
 | P2 | UI Git graph/commit browser, mobile workspace inspector, reduced-motion activity polish |
 | P3 | Multi-provider cost routing, remote worker federation, reusable Team templates |
