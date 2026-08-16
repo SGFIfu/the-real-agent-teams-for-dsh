@@ -6,6 +6,7 @@
  */
 await import('../lib/core/task.test.js');
 await import('../lib/core/authorization.test.js');
+await import('../lib/core/runtime-events.test.js');
 await import('../lib/core/concurrency.test.js');
 await import('../lib/core/dependencies.test.js');
 await import('../lib/core/messaging.test.js');
@@ -15,6 +16,7 @@ await import('../lib/core/persistence.test.js');
 await import('../lib/core/simulation.test.js');
 await import('../lib/client/logic/control.test.js');
 await import('../lib/client/logic/session.test.js');
+await import('../lib/harness/command-route.security.test.js');
 
 // node:test flushes pending tests on exit; give the runner a tick to settle.
 await new Promise((resolve) => setTimeout(resolve, 0));

@@ -9,5 +9,7 @@ export * from './ids.ts';
 export * from './schemas.ts';
 export * from './store.ts';
 export * from './prompts.ts';
+export * from './review.ts';
+export * from './runtime-events.ts';
 export { AgentTeamsService } from './service.ts';
 export type { ServiceDeps } from './service.ts';

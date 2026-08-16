@@ -27,6 +27,8 @@ import type { TeamEventSink, TeamRuntimeAdapter } from './types.ts';
 import { TeamError, teamError } from './errors.ts';
 import { newId } from './ids.ts';
 import * as events from './events.ts';
+import type { ReviewDomain } from './review.ts';
+import type { RuntimeEventLog } from './runtime-events.ts';
 
 export interface ServiceDeps {
   store: TeamStore;
@@ -38,6 +40,10 @@ export interface ServiceDeps {
   defaultProvider?: string;
   /** Cap on simultaneously registered members per team. */
   maxActiveMembers?: number;
+  /** Optional v2 review/QA domain; absent in legacy/no-model fixtures. */
+  review?: ReviewDomain;
+  /** Optional durable audit projection; live sink remains the UI notification path. */
+  runtimeEvents?: RuntimeEventLog;
 }
 
 const PRIORITY_RANK: Record<TaskPriority, number> = { critical: 0, high: 1, normal: 2, low: 3 };
@@ -52,6 +58,8 @@ export class AgentTeamsService {
   readonly sink?: TeamEventSink;
   readonly defaultProvider: string;
   readonly maxActiveMembers: number;
+  readonly review?: ReviewDomain;
+  readonly runtimeEvents?: RuntimeEventLog;
   private readyFlag = false;
   /** Serializes multi-record invariants within one plugin process. */
   private readonly teamMutationQueues = new Map<string, Promise<void>>();
@@ -62,6 +70,8 @@ export class AgentTeamsService {
     this.sink = deps.sink;
     this.defaultProvider = deps.defaultProvider ?? 'spawn';
     this.maxActiveMembers = deps.maxActiveMembers ?? 5;
+    this.review = deps.review;
+    this.runtimeEvents = deps.runtimeEvents;
   }
 
   /** Resolve a team or fail with the typed error. */
@@ -77,6 +87,29 @@ export class AgentTeamsService {
     } catch {
       // Observers must never break the coordination path.
     }
+    this.appendRuntimeEvent(name, payload);
+  }
+
+  private appendRuntimeEvent(name: string, payload: unknown): void {
+    const value = payload !== null && typeof payload === 'object' ? payload as Record<string, unknown> : {};
+    const nestedTeam = value.team !== null && typeof value.team === 'object' ? value.team as Record<string, unknown> : undefined;
+    const nestedEntity = ['task', 'member', 'message', 'plan', 'claim', 'finding']
+      .map((key) => value[key])
+      .find((entry) => entry !== null && typeof entry === 'object') as Record<string, unknown> | undefined;
+    const teamId = typeof value.teamId === 'string'
+      ? value.teamId
+      : typeof nestedTeam?.id === 'string'
+        ? nestedTeam.id
+        : typeof nestedEntity?.teamId === 'string' ? nestedEntity.teamId : undefined;
+    if (this.runtimeEvents === undefined || teamId === undefined) return;
+    const eventId = typeof value.id === 'string' ? value.id : typeof nestedEntity?.id === 'string' ? nestedEntity.id : undefined;
+    void this.runtimeEvents.append({
+      teamId: teamId as AgentTeam['id'],
+      name,
+      visibility: 'public',
+      dedupeKey: eventId === undefined ? undefined : `${name}:${eventId}`,
+      payload: value,
+    }).catch(() => undefined);
   }
 
   private async assertActor(teamId: string, sessionId: SessionId): Promise<{ team: AgentTeam; member?: TeamMember }> {
@@ -199,6 +232,7 @@ export class AgentTeamsService {
       const tasks = await this.store.list('tasks', (t) => t.teamId === teamId);
       const findings = await this.store.list('findings', (f) => f.teamId === teamId);
       const plans = await this.store.list('plans', (p) => p.teamId === teamId);
+      const workspaces = await this.store.list('workspaces', (workspace) => workspace.teamId === teamId);
 
       const required = tasks.filter((t) => t.required && t.status !== 'cancelled');
       const incomplete = required.filter((t) => t.status !== 'completed');
@@ -219,6 +253,21 @@ export class AgentTeamsService {
       if (unplanned.length > 0) reasons.push(`tasks requiring an approved plan: ${unplanned.map((t) => t.id).join(', ')}`);
       const openCritical = findings.filter((f) => f.state === 'open' && (f.severity === 'critical' || f.severity === 'high'));
       if (openCritical.length > 0) reasons.push(`open critical/high review findings: ${openCritical.map((f) => f.id).join(', ')}`);
+      for (const workspace of workspaces) {
+        if (workspace.taskId === undefined || !required.some((task) => task.id === workspace.taskId)) continue;
+        if (!['clean', 'merged'].includes(workspace.status)) {
+          reasons.push(`workspace ${workspace.id} is ${workspace.status}`);
+        }
+        if (this.review !== undefined) {
+          const gate = await this.review.evaluateCompletionGate({
+            teamId,
+            taskId: workspace.taskId,
+            workspaceId: workspace.id,
+            actorSessionId: actor,
+          });
+          if (!gate.approved) reasons.push(`review/QA gate for ${workspace.taskId}: ${gate.reasons.join('; ')}`);
+        }
+      }
       if (reasons.length > 0) throw teamError('TEAM_NOT_COMPLETABLE', 'team completion guard rejected', { teamId, reasons });
       const completed = await this.setTeamStatus(teamId, 'completed');
       this.emit(events.TEAM_COMPLETED, { team: completed });

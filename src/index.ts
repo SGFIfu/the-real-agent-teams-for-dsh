@@ -22,6 +22,8 @@ import type { PromptSection } from '@deepseek-ai/dsh-system-prompt';
 import type { WebRoute } from '@deepseek-ai/dsh-host-webserver';
 import './harness/declare.ts';
 import { AgentTeamsService } from './core/service.ts';
+import { ReviewDomain } from './core/review.ts';
+import { createRuntimeEventLog } from './core/runtime-events.ts';
 import { MemoryStore, type TeamStore } from './core/store.ts';
 import { LEAD_APPENDIX, TEAM_PROTOCOL_CORE } from './core/prompts.ts';
 import { DomainStore } from './harness/domain-store.ts';
@@ -130,6 +132,8 @@ export function apply(ctx: Context, config: Config): void {
     const service = new AgentTeamsService({
       store,
       runtime,
+      review: new ReviewDomain({ store }),
+      runtimeEvents: createRuntimeEventLog(store),
       sink: new CordisEventSink(ctx),
       defaultProvider: config.defaultProvider,
       maxActiveMembers: config.maxActiveMembers,

@@ -7,6 +7,8 @@
 import type { TeamStore } from './store.ts';
 import type { AgentTeam, FileClaim, ReviewFinding, ReviewSeverity, SessionId, TeamMember, TeamMessage, TeamMessageType, TeamPlan, TeamSnapshot, TeamTask, TaskPriority } from './types.ts';
 import type { TeamEventSink, TeamRuntimeAdapter } from './types.ts';
+import type { ReviewDomain } from './review.ts';
+import type { RuntimeEventLog } from './runtime-events.ts';
 export interface ServiceDeps {
     store: TeamStore;
     /** Optional harness runtime adapter; absent in no-model tests/simulation. */
@@ -17,6 +19,10 @@ export interface ServiceDeps {
     defaultProvider?: string;
     /** Cap on simultaneously registered members per team. */
     maxActiveMembers?: number;
+    /** Optional v2 review/QA domain; absent in legacy/no-model fixtures. */
+    review?: ReviewDomain;
+    /** Optional durable audit projection; live sink remains the UI notification path. */
+    runtimeEvents?: RuntimeEventLog;
 }
 export declare class AgentTeamsService {
     readonly store: TeamStore;
@@ -24,6 +30,8 @@ export declare class AgentTeamsService {
     readonly sink?: TeamEventSink;
     readonly defaultProvider: string;
     readonly maxActiveMembers: number;
+    readonly review?: ReviewDomain;
+    readonly runtimeEvents?: RuntimeEventLog;
     private readyFlag;
     /** Serializes multi-record invariants within one plugin process. */
     private readonly teamMutationQueues;
@@ -31,6 +39,7 @@ export declare class AgentTeamsService {
     /** Resolve a team or fail with the typed error. */
     private team;
     private emit;
+    private appendRuntimeEvent;
     private assertActor;
     private assertActive;
     private requireLead;
