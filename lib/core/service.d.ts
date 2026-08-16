@@ -9,6 +9,7 @@ import type { AgentTeam, FileClaim, ReviewFinding, ReviewSeverity, SessionId, Te
 import type { TeamEventSink, TeamRuntimeAdapter } from './types.ts';
 import type { ReviewDomain } from './review.ts';
 import type { RuntimeEventLog } from './runtime-events.ts';
+import type { CreateFindingInput, CreateReviewRequestInput, ReviewSubmission } from './review.ts';
 export interface ServiceDeps {
     store: TeamStore;
     /** Optional harness runtime adapter; absent in no-model tests/simulation. */
@@ -165,6 +166,19 @@ export declare class AgentTeamsService {
     rejectPlan(planId: string, actor: SessionId, feedback: string): Promise<TeamPlan>;
     private requirePlan;
     listPlans(teamId: string, actor: SessionId): Promise<TeamPlan[]>;
+    private requireReviewDomain;
+    createReviewRequest(input: Omit<CreateReviewRequestInput, 'requestedBy'> & {
+        requestedBy?: never;
+    }, actor: SessionId): Promise<import('./types.ts').ReviewRequest>;
+    startReview(requestId: string, actor: SessionId): Promise<import('./types.ts').ReviewRequest>;
+    submitReviewResult(input: Omit<Parameters<ReviewDomain['submitResult']>[0], 'reviewerSessionId'>, actor: SessionId): Promise<ReviewSubmission>;
+    createReviewFinding(input: Omit<CreateFindingInput, 'authorSessionId'>, actor: SessionId): Promise<ReviewFinding>;
+    resolveReviewFinding(findingId: string, resolutionEvidence: string, actor: SessionId): Promise<ReviewFinding>;
+    evaluateReviewGate(input: {
+        teamId: string;
+        taskId: string;
+        workspaceId: string;
+    }, actor: SessionId): Promise<import('./review.ts').ReviewGate>;
     private normalizePattern;
     /**
      * File ownership is the coordination boundary immediately before an agent

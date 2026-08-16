@@ -8,11 +8,10 @@
  */
 import type { TeamStore } from './store.ts';
 import type { ReviewFinding, ReviewRequest, ReviewRequestId, ReviewResult, ReviewSeverity, SessionId } from './types.ts';
+import { TeamError } from './errors.ts';
 export type ReviewDomainErrorCode = 'REVIEW_NOT_FOUND' | 'REVIEW_STATE_INVALID' | 'REVIEW_ACTOR_INVALID' | 'REVIEW_CONTEXT_INVALID' | 'REVIEW_FINDING_INVALID' | 'REVIEW_NOT_APPROVABLE' | 'QA_EVIDENCE_MISSING' | 'QA_EVIDENCE_INVALID';
-/** Typed errors local to the bounded review domain. */
-export declare class ReviewDomainError extends Error {
-    readonly code: ReviewDomainErrorCode;
-    readonly details?: Record<string, unknown>;
+/** Typed errors local to the bounded review domain, serializable by tools. */
+export declare class ReviewDomainError extends TeamError {
     constructor(code: ReviewDomainErrorCode, message: string, details?: Record<string, unknown>);
 }
 export type QaEvidenceKind = 'test' | 'manual' | 'tool' | 'artifact' | 'runtime';

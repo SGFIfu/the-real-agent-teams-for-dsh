@@ -461,6 +461,67 @@ export function registerTeamTools(deps: ToolsDeps): Array<() => void> {
     defineTool(deps, 'team_plan_list', 'List plans for a team.', params({ teamId: stringProp('Team id') }, ['teamId']), (args, actor, s) => s.listPlans(args.teamId, actor)),
   );
 
+  register(
+    defineTool(
+      deps,
+      'team_review_request',
+      'Request an independent teammate review for a task workspace.',
+      params({ teamId: stringProp('Team id'), taskId: stringProp('Task id'), workspaceId: stringProp('Workspace id'), reviewerMemberId: stringProp('Independent reviewer member id'), baseRef: stringProp('Base Git ref'), headRef: stringProp('Head Git ref') }, ['teamId', 'taskId', 'workspaceId', 'reviewerMemberId', 'baseRef', 'headRef']),
+      (args, actor, s) => s.createReviewRequest({ teamId: args.teamId, taskId: args.taskId, workspaceId: args.workspaceId, reviewerMemberId: args.reviewerMemberId, baseRef: args.baseRef, headRef: args.headRef }, actor),
+    ),
+  );
+
+  register(
+    defineTool(deps, 'team_review_start', 'Start a review as the assigned independent reviewer.', params({ requestId: stringProp('Review request id') }, ['requestId']), (args, actor, s) => s.startReview(args.requestId, actor)),
+  );
+
+  register(
+    defineTool(
+      deps,
+      'team_review_finding',
+      'Record a structured review finding linked to one task workspace and responsible fixer.',
+      params({ teamId: stringProp('Team id'), taskId: stringProp('Task id'), workspaceId: stringProp('Workspace id'), responsibleMemberId: stringProp('Responsible fixer member id'), severity: { type: 'string', enum: ['critical', 'high', 'medium', 'low'] }, title: stringProp('Finding title'), description: stringProp('Finding description'), evidence: stringProp('Concrete diff/test evidence') }, ['teamId', 'taskId', 'workspaceId', 'responsibleMemberId', 'severity', 'title', 'description', 'evidence']),
+      (args, actor, s) => s.createReviewFinding({ teamId: args.teamId, taskId: args.taskId, workspaceId: args.workspaceId, responsibleMemberId: args.responsibleMemberId, severity: args.severity, title: args.title, description: args.description, evidence: args.evidence }, actor),
+    ),
+  );
+
+  register(
+    defineTool(deps, 'team_review_resolve_finding', 'Resolve a finding after the responsible teammate fixes it and records evidence.', params({ findingId: stringProp('Finding id'), resolutionEvidence: stringProp('Test or diff evidence for the fix') }, ['findingId', 'resolutionEvidence']), (args, actor, s) => s.resolveReviewFinding(args.findingId, args.resolutionEvidence, actor)),
+  );
+
+  register(
+    defineTool(
+      deps,
+      'team_review_submit',
+      'Submit the assigned reviewer verdict with structured QA evidence. Approval is rejected while medium/high/critical findings remain unresolved.',
+      params(
+        {
+          requestId: stringProp('Review request id'),
+          verdict: { type: 'string', enum: ['approved', 'changes_requested', 'rejected'] },
+          findingIds: arrayOfStrings('Finding ids reviewed'),
+          evidence: {
+            type: 'array',
+            items: nestedObject(
+              {
+                id: stringProp('Evidence id'),
+                kind: { type: 'string', enum: ['test', 'manual', 'tool', 'artifact', 'runtime'] },
+                outcome: { type: 'string', enum: ['passed', 'failed', 'observed'] },
+                summary: stringProp('Evidence summary'),
+                source: stringProp('Evidence source'),
+                recordedBySessionId: stringProp('Session that recorded evidence'),
+                verifiedBySessionId: stringProp('Assigned reviewer session'),
+                verifiedAt: { type: 'number' },
+              },
+              ['id', 'kind', 'outcome', 'summary', 'source', 'recordedBySessionId', 'verifiedBySessionId', 'verifiedAt'],
+            ),
+          },
+        },
+        ['requestId', 'verdict', 'evidence'],
+      ),
+      (args, actor, s) => s.submitReviewResult({ requestId: args.requestId, verdict: args.verdict, findingIds: args.findingIds, evidence: args.evidence }, actor),
+    ),
+  );
+
   // ── file claims ────────────────────────────────────────────────────────────
   register(
     defineTool(

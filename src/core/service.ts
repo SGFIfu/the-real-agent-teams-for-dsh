@@ -29,6 +29,11 @@ import { newId } from './ids.ts';
 import * as events from './events.ts';
 import type { ReviewDomain } from './review.ts';
 import type { RuntimeEventLog } from './runtime-events.ts';
+import type {
+  CreateFindingInput,
+  CreateReviewRequestInput,
+  ReviewSubmission,
+} from './review.ts';
 
 export interface ServiceDeps {
   store: TeamStore;
@@ -930,6 +935,36 @@ export class AgentTeamsService {
   async listPlans(teamId: string, actor: SessionId): Promise<TeamPlan[]> {
     await this.assertActor(teamId, actor);
     return this.store.list('plans', (p) => p.teamId === teamId);
+  }
+
+  private requireReviewDomain(): ReviewDomain {
+    if (this.review === undefined) throw teamError('INVALID_INPUT', 'review domain is not mounted in this process');
+    return this.review;
+  }
+
+  async createReviewRequest(input: Omit<CreateReviewRequestInput, 'requestedBy'> & { requestedBy?: never }, actor: SessionId): Promise<import('./types.ts').ReviewRequest> {
+    await this.assertActor(input.teamId, actor);
+    return this.requireReviewDomain().createRequest({ ...input, requestedBy: actor });
+  }
+
+  async startReview(requestId: string, actor: SessionId): Promise<import('./types.ts').ReviewRequest> {
+    return this.requireReviewDomain().startReview(requestId, actor);
+  }
+
+  async submitReviewResult(input: Omit<Parameters<ReviewDomain['submitResult']>[0], 'reviewerSessionId'>, actor: SessionId): Promise<ReviewSubmission> {
+    return this.requireReviewDomain().submitResult({ ...input, reviewerSessionId: actor });
+  }
+
+  async createReviewFinding(input: Omit<CreateFindingInput, 'authorSessionId'>, actor: SessionId): Promise<ReviewFinding> {
+    return this.requireReviewDomain().createFinding({ ...input, authorSessionId: actor });
+  }
+
+  async resolveReviewFinding(findingId: string, resolutionEvidence: string, actor: SessionId): Promise<ReviewFinding> {
+    return this.requireReviewDomain().resolveFinding(findingId, actor, resolutionEvidence);
+  }
+
+  async evaluateReviewGate(input: { teamId: string; taskId: string; workspaceId: string }, actor: SessionId): Promise<import('./review.ts').ReviewGate> {
+    return this.requireReviewDomain().evaluateCompletionGate({ ...input, actorSessionId: actor });
   }
 
   // ── file claims ────────────────────────────────────────────────────────────

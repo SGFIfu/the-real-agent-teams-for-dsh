@@ -36,16 +36,11 @@ export type ReviewDomainErrorCode =
   | 'QA_EVIDENCE_MISSING'
   | 'QA_EVIDENCE_INVALID';
 
-/** Typed errors local to the bounded review domain. */
-export class ReviewDomainError extends Error {
-  readonly code: ReviewDomainErrorCode;
-  readonly details?: Record<string, unknown>;
-
+/** Typed errors local to the bounded review domain, serializable by tools. */
+export class ReviewDomainError extends TeamError {
   constructor(code: ReviewDomainErrorCode, message: string, details?: Record<string, unknown>) {
-    super(message);
+    super(code, message, details);
     this.name = 'ReviewDomainError';
-    this.code = code;
-    this.details = details;
   }
 }
 
