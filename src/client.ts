@@ -73,6 +73,139 @@ export interface Bridge {
   removeMember(teamId: string, memberId: string): Promise<any>;
 }
 
+type SessionBindingLike = { session: { getSnapshot(): unknown; subscribe(listener: () => void): () => void } };
+
+/**
+ * The web session service has had two catalog shapes across Harness builds:
+ * a reactive `list.getSnapshot()` facade and a direct `listChildren()` method.
+ * Keep the compatibility code here, at the client boundary, and never fall
+ * back to the host trajectory viewer (`sessions.open()`), which is not a
+ * privacy-safe surface for Agent Teams.
+ */
+export async function resolvePublicSubagentAddress(
+  sessions: unknown,
+  parentSessionId: string | undefined,
+  childSessionId: string,
+): Promise<unknown> {
+  if (sessions === null || typeof sessions !== 'object' || parentSessionId === undefined) return undefined;
+  const service = sessions as Record<string, any>;
+  const list = service.list as Record<string, any> | undefined;
+  const directAddress = typeof service.subagentAddress === 'function'
+    ? service.subagentAddress(childSessionId)
+    : typeof list?.subagentAddress === 'function'
+      ? list.subagentAddress(childSessionId)
+      : undefined;
+  if (directAddress !== undefined) return directAddress;
+
+  const childListers: Array<{ owner: any; fn: (parent: string) => Promise<unknown> | unknown }> = [];
+  for (const owner of [service, service.subagents, service.subagentRuntime, list]) {
+    if (owner !== undefined && typeof owner.listChildren === 'function') childListers.push({ owner, fn: owner.listChildren });
+  }
+  for (const candidate of childListers) {
+    try {
+      const entries = await candidate.fn.call(candidate.owner, parentSessionId);
+      const address = subagentAddressFromCatalog(parentSessionId, childSessionId, Array.isArray(entries) ? entries : undefined);
+      if (address !== undefined) return address;
+    } catch {
+      // A missing optional client catalog must not prevent the retained
+      // `binding(member.sessionId)` from being used below.
+    }
+  }
+
+  const refreshers: Array<{ owner: any; fn: (parent: string) => Promise<unknown> | unknown }> = [];
+  for (const owner of [service, list]) {
+    if (owner === undefined) continue;
+    for (const name of ['refreshSubagents', 'refreshChildren', 'refresh']) {
+      if (typeof owner[name] === 'function') refreshers.push({ owner, fn: owner[name] });
+    }
+  }
+  for (const candidate of refreshers) {
+    try {
+      await candidate.fn.call(candidate.owner, parentSessionId);
+      const address = subagentAddressFromSnapshot(service, list, parentSessionId, childSessionId);
+      if (address !== undefined) return address;
+    } catch {
+      // Try the next official catalog source; address resolution is best effort.
+    }
+  }
+  return subagentAddressFromSnapshot(service, list, parentSessionId, childSessionId);
+}
+
+function subagentAddressFromSnapshot(
+  service: Record<string, any>,
+  list: Record<string, any> | undefined,
+  parentSessionId: string,
+  childSessionId: string,
+): unknown {
+  const snapshots: unknown[] = [];
+  for (const owner of [list, service]) {
+    if (owner !== undefined && typeof owner.getSnapshot === 'function') {
+      try { snapshots.push(owner.getSnapshot()); } catch { /* optional facade */ }
+    }
+  }
+  for (const snapshot of snapshots) {
+    if (snapshot === null || typeof snapshot !== 'object') continue;
+    const record = snapshot as Record<string, any>;
+    const grouped = record.subagentsByParent?.[parentSessionId];
+    const entries = Array.isArray(grouped) ? grouped : grouped !== null && typeof grouped === 'object' && Array.isArray(grouped.entries) ? grouped.entries : undefined;
+    const address = subagentAddressFromCatalog(parentSessionId, childSessionId, entries);
+    if (address !== undefined) return address;
+  }
+  return undefined;
+}
+
+/** Open only the explicit public child-session surface, never the host viewer. */
+export async function openPublicSubagent(sessions: unknown, address: unknown): Promise<boolean> {
+  if (sessions === null || typeof sessions !== 'object' || address === undefined) return false;
+  const service = sessions as Record<string, any>;
+  const list = service.list as Record<string, any> | undefined;
+  for (const owner of [service, list]) {
+    if (owner === undefined) continue;
+    for (const name of ['openSubagent', 'openChildSubagent']) {
+      if (typeof owner[name] !== 'function') continue;
+      try {
+        await owner[name](address);
+        return true;
+      } catch {
+        // Continue to the next compatible explicit public opener.
+      }
+    }
+  }
+  return false;
+}
+
+/** Resolve a retained real binding by the persisted Harness session id. */
+export function sessionBindingFor(sessions: unknown, sessionId: string): SessionBindingLike | undefined {
+  if (sessions === null || typeof sessions !== 'object') return undefined;
+  const service = sessions as Record<string, any>;
+  if (typeof service.binding !== 'function') return undefined;
+  try {
+    const binding = service.binding(sessionId);
+    return binding !== undefined && binding.session !== undefined ? binding as SessionBindingLike : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** A successful delivery is the only message event allowed to fly. */
+export function messageDeliverySucceeded(message: { deliveryState?: string } | undefined): boolean {
+  return message?.deliveryState !== 'failed';
+}
+
+export function isFailedMessageFrame(frame: unknown): boolean {
+  if (frame === null || typeof frame !== 'object') return false;
+  const value = frame as Record<string, any>;
+  if (value.type === 'agent-teams/message-delivery-failed') return true;
+  const message = value.message;
+  return value.type === 'agent-teams/message-sent' && message !== null && typeof message === 'object' && message.deliveryState === 'failed';
+}
+
+export function shouldAnimateMessage(eventId: string, messages: readonly { id: string; deliveryState?: string }[], frame?: unknown): boolean {
+  if (isFailedMessageFrame(frame)) return false;
+  const messageId = eventId.startsWith('msg-') ? eventId.slice(4).replace(/-failed$/, '') : eventId;
+  return messageDeliverySucceeded(messages.find((message) => message.id === messageId));
+}
+
 interface Animation {
   id: string;
   kind: string;
@@ -88,7 +221,7 @@ const CSS = `
 /* Harness theme bootstrap owns body[data-ds-dark-theme]. Keep the panel
  * aligned with that source of truth instead of maintaining a second theme
  * preference inside the plugin. */
-body:not([data-ds-dark-theme]) .agc-surface, [data-agc-theme="light"] { --agc-bg: #f6f8fa; --agc-panel: #ffffff; --agc-card: #ffffff; --agc-border: #d0d7de; --agc-text: #1f2328; --agc-muted: #57606a; --agc-input: #ffffff; }
+body:not([data-ds-dark-theme]) .agc-surface, [data-agc-theme="light"], body[data-theme="light"] .agc-surface, html[data-theme="light"] .agc-surface, [data-ds-theme="light"] .agc-surface { --agc-bg: #f6f8fa; --agc-panel: #ffffff; --agc-card: #ffffff; --agc-border: #d0d7de; --agc-text: #1f2328; --agc-muted: #57606a; --agc-input: #ffffff; }
 .agc-overlay { z-index: 2147483000; }
 .agc-teamlist { display: flex; flex-direction: column; gap: 10px; padding: 18px; overflow: auto; }
 .agc-teamrow { display: flex; align-items: center; gap: 12px; width: 100%; text-align: left; border: 1px solid var(--agc-border); border-radius: 12px; padding: 12px; background: var(--agc-card); color: inherit; cursor: pointer; }
@@ -154,7 +287,7 @@ body:not([data-ds-dark-theme]) .agc-feeditem:hover { background: #eef2f6; }
 .agc-feedtime { opacity: .5; font-size: 10px; margin-right: 6px; }
 .agc-filters { display: flex; gap: 4px; padding: 6px 10px; flex-wrap: wrap; }
 .agc-filter { border: 1px solid var(--agc-border); background: transparent; color: inherit; border-radius: 10px; font-size: 10px; padding: 2px 8px; cursor: pointer; }
-.agc-filter.on { background: #1c2c45; border-color: #58a6ff; }
+.agc-filter.on { background: #1c2c45; border-color: #58a6ff; color: #dbeafe; }
 .agc-banner { margin-bottom: 10px; border: 1px solid var(--agc-border); border-radius: 10px; padding: 10px 12px; }
 .agc-banner.plan { border-color: #d29922; }
 .agc-banner.block { border-color: #f85149; }
@@ -164,7 +297,7 @@ body:not([data-ds-dark-theme]) .agc-feeditem:hover { background: #eef2f6; }
 .agc-drawerbody { flex: 1; overflow: auto; padding: 12px 14px; }
 .agc-tabs { display: flex; gap: 4px; flex-wrap: wrap; margin-bottom: 10px; }
 .agc-tab { border: 1px solid var(--agc-border); background: transparent; color: inherit; border-radius: 8px; font-size: 11px; padding: 4px 10px; cursor: pointer; }
-.agc-tab.on { background: #1c2c45; border-color: #58a6ff; }
+.agc-tab.on { background: #1c2c45; border-color: #58a6ff; color: #dbeafe; }
 .agc-card { border: 1px solid var(--agc-border); border-radius: 10px; padding: 10px; margin-bottom: 10px; background: var(--agc-card); }
 .agc-kv { display: flex; justify-content: space-between; font-size: 12px; padding: 2px 0; }
 .agc-input { width: 100%; box-sizing: border-box; background: var(--agc-input); color: var(--agc-text); border: 1px solid var(--agc-border); border-radius: 8px; padding: 8px; font-size: 12px; }
@@ -175,6 +308,7 @@ body:not([data-ds-dark-theme]) .agc-feeditem:hover { background: #eef2f6; }
 .agc-tool { border: 1px solid var(--agc-border); border-radius: 8px; padding: 4px 8px; font-size: 11px; margin: 3px 0; }
 .agc-empty { opacity: .6; font-size: 12px; padding: 14px; text-align: center; }
 .agc-skeleton { height: 12px; border-radius: 6px; background: #1a1a1a; animation: agcPulse 1.4s ease-in-out infinite; margin: 6px 0; }
+body:not([data-ds-dark-theme]) .agc-skeleton { background: #e1e7ee; }
 .agc-observe { display: flex; gap: 10px; overflow: auto; }
 .agc-observecol { flex: 1; min-width: 180px; border: 1px solid var(--agc-border); border-radius: 10px; padding: 8px; font-size: 11px; }
 .agc-session-feed { max-height: 42vh; overflow: auto; border: 1px solid var(--agc-border); border-radius: 10px; padding: 8px; }
@@ -191,13 +325,21 @@ body:not([data-ds-dark-theme]) .agc-feeditem:hover { background: #eef2f6; }
   .agc-head { gap: 7px; padding: 8px 10px; }
   .agc-title { font-size: 14px; }
   .agc-goal { max-width: 100%; width: 100%; }
-  .agc-body { flex-direction: column; overflow: auto; }
+  .agc-body { flex-direction: column; overflow: auto; min-height: 0; }
   .agc-main { flex: none; min-height: 48vh; padding: 10px; }
-  .agc-side { width: 100%; flex: none; height: 260px; border-left: 0; border-top: 1px solid var(--agc-border); }
+  .agc-side { width: 100%; flex: none; height: 260px; min-height: 220px; border-left: 0; border-top: 1px solid var(--agc-border); }
   .agc-node { width: 132px; }
   .agc-workspace { overflow: auto; }
   .agc-drawer { width: 100vw; border-left: 0; }
   .agc-session-feed { max-height: 48vh; }
+}
+@media (max-width: 380px) {
+  .agc-head { align-items: flex-start; }
+  .agc-progress { order: 5; flex-basis: 100%; min-width: 0; }
+  .agc-node { width: calc(50vw - 30px); min-width: 118px; }
+  .agc-workspace { padding: 10px; }
+  .agc-drawerhead { padding: 10px; }
+  .agc-drawerbody { padding: 10px; }
 }
 `;
 
@@ -526,9 +668,19 @@ function CommandCenter(props: { bridge: Bridge; ctx: any; teamId: string; onClos
   const [observe, setObserve] = React.useState<string[]>([]);
   const [connection, setConnection] = React.useState<'connected' | 'reconnecting'>('reconnecting');
   const [session, setSession] = React.useState<SafeSessionSnapshot | undefined>(undefined);
-  const reduced = React.useMemo(() => prefersReducedMotion(), []);
+  const [reduced, setReduced] = React.useState(() => prefersReducedMotion());
   const prevRef = React.useRef<UiSnapshot | undefined>(undefined);
+  const streamStateRef = React.useRef<'connected' | 'reconnecting'>('reconnecting');
   const leadSessionId = snapshot?.leadSessionId;
+
+  React.useEffect(() => {
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return;
+    const media = window.matchMedia('(prefers-reduced-motion: reduce)');
+    const update = () => setReduced(media.matches);
+    update();
+    media.addEventListener?.('change', update);
+    return () => media.removeEventListener?.('change', update);
+  }, []);
 
   React.useEffect(() => {
     let alive = true;
@@ -548,6 +700,7 @@ function CommandCenter(props: { bridge: Bridge; ctx: any; teamId: string; onClos
         if (animate && prev !== undefined && !reduced) {
           const anims: Animation[] = fresh
             .filter((e) => (e.kind === 'message' || e.kind === 'finding' || e.kind === 'plan-approved' || e.kind === 'plan-rejected') && e.targetSessionId !== undefined)
+            .filter((e) => e.kind !== 'message' || shouldAnimateMessage(e.id, next.messages))
             .map((e) => ({ id: e.id, kind: e.kind, fromSessionId: e.sessionId, targetSessionId: e.targetSessionId, label: e.kind === 'message' ? (e.preview ?? 'message') : e.title ?? '', until: Date.now() + 2000 }));
           if (anims.length > 0) setAnimations(anims);
         }
@@ -562,8 +715,9 @@ function CommandCenter(props: { bridge: Bridge; ctx: any; teamId: string; onClos
         }
         prevRef.current = next;
         setSnapshot(next);
-        setConnection('connected');
+        if (streamStateRef.current === 'connected') setConnection('connected');
       } catch {
+        streamStateRef.current = 'reconnecting';
         setConnection('reconnecting');
       }
     };
@@ -581,6 +735,7 @@ function CommandCenter(props: { bridge: Bridge; ctx: any; teamId: string; onClos
     };
     const onStreamState = (state: 'connected' | 'reconnecting') => {
       if (!alive) return;
+      streamStateRef.current = state;
       setConnection(state);
       if (state === 'reconnecting') { off(); scheduleReconnect(); }
       else retryAttempt = 0;
@@ -590,7 +745,7 @@ function CommandCenter(props: { bridge: Bridge; ctx: any; teamId: string; onClos
       const ui = rawEventToUiEvent(frame, Date.now());
       if (ui === undefined || ui.teamId !== teamId) return;
       setActivity((buffer) => pushBuffer(buffer, [ui], 300));
-      if (!reduced && (ui.kind === 'message' || ui.kind === 'finding' || ui.kind === 'plan-approved' || ui.kind === 'plan-rejected')) {
+      if (!reduced && (ui.kind === 'message' || ui.kind === 'finding' || ui.kind === 'plan-approved' || ui.kind === 'plan-rejected') && (ui.kind !== 'message' || !isFailedMessageFrame(frame))) {
         setAnimations((a) => [...a.filter((x) => x.until > Date.now()), { id: ui.id, kind: ui.kind, fromSessionId: ui.sessionId, targetSessionId: ui.targetSessionId, label: ui.kind === 'message' ? (ui.preview ?? 'message') : ui.title ?? '', until: Date.now() + 2000 }]);
       }
       void refresh(true);
@@ -605,13 +760,8 @@ function CommandCenter(props: { bridge: Bridge; ctx: any; teamId: string; onClos
     let alive = true;
     let off = () => {};
     if (inspector === null) { setSession(undefined); return () => { alive = false; }; }
-    const sessions = ctx.get('sessions') as {
-      list?: { getSnapshot(): { subagentsByParent?: Readonly<Record<string, unknown>> } };
-      binding(id: string): { session: { getSnapshot(): unknown; subscribe(listener: () => void): () => void } } | undefined;
-      subagentAddress?: (id: string) => unknown;
-      openSubagent?: (address: unknown) => void;
-      refreshSubagents?: (parentSessionId: string) => Promise<void>;
-    } | undefined;
+    let sessions: unknown;
+    try { sessions = ctx.get('sessions'); } catch { sessions = undefined; }
     const hydrate = async () => {
       // A child can be durable in the host while its catalog address has not
       // been pulled into this browser scope yet. Refresh the lead's official
@@ -622,21 +772,10 @@ function CommandCenter(props: { bridge: Bridge; ctx: any; teamId: string; onClos
       // child history window is staged/open. Always resolve the catalog address
       // and call the official openSubagent() path before reading the snapshot;
       // otherwise a real child can remain in its cold empty projection forever.
-      let address = sessions?.subagentAddress?.(inspector);
-      if (address === undefined && leadSessionId !== undefined && sessions?.refreshSubagents !== undefined) {
-        try { await sessions.refreshSubagents(leadSessionId); } catch { /* address remains unavailable */ }
-        address = sessions?.subagentAddress?.(inspector);
-      }
-      const catalog = leadSessionId === undefined ? undefined : sessions?.list?.getSnapshot?.().subagentsByParent?.[leadSessionId];
-      if (address === undefined && leadSessionId !== undefined && catalog !== null && typeof catalog === 'object') {
-        const entries = (catalog as Record<string, unknown>).entries;
-        address = subagentAddressFromCatalog(leadSessionId, inspector, Array.isArray(entries) ? entries : undefined);
-      }
+      const address = await resolvePublicSubagentAddress(sessions, leadSessionId, inspector);
       if (!alive) return;
-      if (address !== undefined && sessions?.openSubagent !== undefined) {
-        try { sessions.openSubagent(address); } catch { /* binding may still be retained */ }
-      }
-      let binding = sessions?.binding(inspector);
+      if (address !== undefined) await openPublicSubagent(sessions, address);
+      const binding = sessionBindingFor(sessions, inspector);
       if (!alive || binding === undefined) { setSession(undefined); return; }
       const update = () => setSession(projectVisibleSession(binding!.session.getSnapshot()));
       update();

@@ -235,3 +235,19 @@ test('normalizeSnapshot coerces the raw payload into the UI model', () => {
   assert.equal(ui.fileClaims[0].pattern, 'src/*.ts');
   assert.equal(ui.progress.ratio, 0.5);
 });
+
+test('failed message delivery remains activity with an explicit failure event', () => {
+  const failed = rawEventToUiEvent({
+    type: 'agent-teams/message-sent',
+    message: { id: 'bad', teamId: 'team-1', fromSessionId: 's1', toSessionId: 's2', body: 'ping', deliveryState: 'failed', deliveryError: 'session unavailable' },
+  }, 20);
+  assert.equal(failed?.kind, 'message');
+  assert.equal(failed?.title, 'Message delivery failed');
+  assert.match(failed?.preview ?? '', /delivery failed/);
+  const explicitFailure = rawEventToUiEvent({
+    type: 'agent-teams/message-delivery-failed',
+    message: { id: 'bad', teamId: 'team-1', fromSessionId: 's1', toSessionId: 's2' },
+    error: 'session unavailable',
+  }, 21);
+  assert.equal(explicitFailure?.title, 'Message delivery failed');
+});
