@@ -218,3 +218,18 @@ continuation still returned the real Provider error `402 Insufficient Balance`
 (`QUOTA`). Tester, Reviewer/fix/re-review, final validation, and successful
 `team_complete` remain unexecuted. The acceptance status therefore remains
 **PARTIALLY IMPROVED / NOT QUALIFIED**.
+
+## P0 Ready-worker Reconciliation Addendum — 2026-08-17
+
+The runtime now reconciles persisted and newly-created READY work when an
+eligible teammate is idle, after native child binding, and during service
+startup. Wake requests use bounded retry state and are cleared on claim or
+delivery failure. Local regressions cover task-creation wake, idle retry,
+persisted READY work after reload, role routing, and atomic claim safety.
+
+Validation is **115/115 tests PASS**, typecheck/build/client/dynamic preflight
+PASS, and the rebuilt Harness booted with no new plugin errors. The live P0
+Team still has Tester T4 READY/idle; its next real control turn is blocked by
+`402 Insufficient Balance` / `QUOTA`. Therefore the real Tester claim,
+Reviewer loop, final validation, and successful team completion remain
+unverified. Judgment remains **PARTIALLY IMPROVED / NOT QUALIFIED**.

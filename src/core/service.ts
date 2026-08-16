@@ -79,6 +79,11 @@ export class AgentTeamsService {
   private readonly teamMutationQueues = new Map<string, Promise<void>>();
   /** Coalesces duplicate wake-ups while a worker is being nudged. */
   private readonly wakeKeys = new Set<string>();
+  /** Bounded liveness retries for a wake that did not result in a claim. */
+  private readonly wakeAttempts = new Map<string, number>();
+  private readonly wakeRetryTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  private static readonly MAX_WAKE_ATTEMPTS = 3;
+  private static readonly WAKE_RETRY_DELAY_MS = 1500;
 
   constructor(deps: ServiceDeps) {
     this.store = deps.store;
@@ -172,6 +177,13 @@ export class AgentTeamsService {
   async ready(): Promise<void> {
     await this.store.ready();
     this.readyFlag = true;
+    // Recovery is snapshot-first: after a plugin reload, a persisted READY
+    // task may have no new event to trigger scheduling. Reconcile it against
+    // the current worker catalog and issue bounded native wake-ups.
+    if (this.runtime !== undefined) {
+      const teams = await this.store.list('teams', (team) => team.status === 'active');
+      for (const team of teams) await this.notifyReadyWorkers(team.id);
+    }
   }
 
   private requireWorkspaceManager(): WorkspaceManager {
@@ -403,6 +415,7 @@ export class AgentTeamsService {
     }));
     const bound = result.value as TeamMember;
     this.emit(events.MEMBER_STATUS, { member: bound, previousSessionId: member.sessionId, binding: 'native-child' });
+    await this.notifyReadyWorkers(bound.teamId);
     return bound;
   }
 
@@ -499,8 +512,9 @@ export class AgentTeamsService {
         }));
         this.emit(events.TASK_RELEASED, { task: released.value, reason: 'member runtime ' + effectivePatch.status });
       }
-      const ready = await this.refreshReadyTasks(current.teamId);
-      await this.wakeEligibleWorkers(current.teamId, ready);
+      await this.notifyReadyWorkers(current.teamId);
+    } else if (effectivePatch.status === 'idle') {
+      await this.retryReadyWorkers(current.teamId, current.sessionId);
     }
     return updated;
   }
@@ -617,6 +631,7 @@ export class AgentTeamsService {
     const result = await this.store.update('tasks', taskId, (current) => ({ ...current, assignedMemberId: member.id, assignedRole: current.assignedRole ?? member.role }));
     const assigned = result.value as TeamTask;
     this.emit(events.TASK_READY, { task: assigned, assignment: 'explicit', memberId: member.id });
+    await this.notifyReadyWorkers(assigned.teamId);
     return assigned;
   }
 
@@ -668,6 +683,7 @@ export class AgentTeamsService {
     };
     await this.store.put('tasks', id, task);
     this.emit(events.TASK_CREATED, { task });
+    await this.notifyReadyWorkers(task.teamId);
     return task;
   }
 
@@ -765,7 +781,53 @@ export class AgentTeamsService {
     return ready;
   }
 
-  private async wakeEligibleWorkers(teamId: string, readyTasks: TeamTask[]): Promise<void> {
+  private wakeKey(taskId: string, sessionId: SessionId): string {
+    return `${taskId}:${sessionId}`;
+  }
+
+  private clearWakeRetry(key: string): void {
+    this.wakeKeys.delete(key);
+    this.wakeAttempts.delete(key);
+    const timer = this.wakeRetryTimers.get(key);
+    if (timer !== undefined) {
+      clearTimeout(timer);
+      this.wakeRetryTimers.delete(key);
+    }
+  }
+
+  private scheduleWakeRetry(teamId: string, taskId: TaskId, sessionId: SessionId): void {
+    const key = this.wakeKey(taskId, sessionId);
+    if (this.wakeRetryTimers.has(key) || (this.wakeAttempts.get(key) ?? 0) >= AgentTeamsService.MAX_WAKE_ATTEMPTS) return;
+    const timer = setTimeout(() => {
+      this.wakeRetryTimers.delete(key);
+      void (async () => {
+        const member = await this.memberBySession(teamId, sessionId);
+        // A running worker may be taking time to read the authoritative board.
+        // Retry only after it is demonstrably idle, avoiding duplicate prompts.
+        if (member === undefined || member.currentTaskId !== undefined || member.status !== 'idle') return;
+        const ready = await this.refreshReadyTasks(teamId);
+        await this.wakeEligibleWorkers(teamId, ready, sessionId);
+        if (this.wakeKeys.has(key)) this.scheduleWakeRetry(teamId, taskId, sessionId);
+      })().catch(() => undefined);
+    }, AgentTeamsService.WAKE_RETRY_DELAY_MS);
+    timer.unref?.();
+    this.wakeRetryTimers.set(key, timer);
+  }
+
+  private async notifyReadyWorkers(teamId: string): Promise<void> {
+    const ready = await this.refreshReadyTasks(teamId);
+    await this.wakeEligibleWorkers(teamId, ready);
+  }
+
+  /** Re-check authoritative state when a native worker becomes idle. */
+  async retryReadyWorkers(teamId: string, sessionId: SessionId): Promise<void> {
+    const member = await this.memberBySession(teamId, sessionId);
+    if (member === undefined || member.currentTaskId !== undefined || member.status !== 'idle') return;
+    const ready = await this.refreshReadyTasks(teamId);
+    await this.wakeEligibleWorkers(teamId, ready, sessionId);
+  }
+
+  private async wakeEligibleWorkers(teamId: string, readyTasks: TeamTask[], retrySessionId?: SessionId): Promise<void> {
     if (this.runtime === undefined || readyTasks.length === 0) return;
     const team = await this.team(teamId);
     const members = await this.store.list('members', (member) => member.teamId === teamId && member.status !== 'failed' && member.status !== 'stopped' && member.currentTaskId === undefined);
@@ -776,9 +838,13 @@ export class AgentTeamsService {
         hasCapabilities(member, task.requiredCapabilities),
       );
       for (const member of targets) {
-        const key = `${task.id}:${member.sessionId}`;
-        if (this.wakeKeys.has(key)) continue;
+        const key = this.wakeKey(task.id, member.sessionId);
+        const retrying = retrySessionId === member.sessionId;
+        if (this.wakeKeys.has(key) && !retrying) continue;
+        const attempts = this.wakeAttempts.get(key) ?? 0;
+        if (retrying && attempts >= AgentTeamsService.MAX_WAKE_ATTEMPTS) continue;
         this.wakeKeys.add(key);
+        this.wakeAttempts.set(key, attempts + 1);
         const text = `Authoritative team update: task ${task.id} (${task.title}) is READY. Sync team_snapshot, check your inbox, then claimNextTask if eligible. Do not claim tasks assigned to another member or role.`;
         this.emit(events.WORKER_WAKEUP_REQUESTED, { teamId, taskId: task.id, sessionId: member.sessionId });
         try {
@@ -787,8 +853,9 @@ export class AgentTeamsService {
           } else {
             await this.runtime.followup(this.leadHandleFor(team), member.sessionId, text, team.leadSessionId);
           }
+          this.scheduleWakeRetry(teamId, task.id, member.sessionId);
         } catch (error) {
-          this.wakeKeys.delete(key);
+          this.clearWakeRetry(key);
           this.emit(events.WORKER_WAKEUP_FAILED, { teamId, taskId: task.id, sessionId: member.sessionId, error: String(error) });
         }
       }
@@ -853,7 +920,7 @@ export class AgentTeamsService {
     });
     if (result.found && (result.value as TeamTask).ownerSessionId === actor && (result.value as TeamTask).status === 'in_progress') {
       const claimed = result.value as TeamTask;
-      this.wakeKeys.delete(`${claimed.id}:${actor}`);
+      this.clearWakeRetry(this.wakeKey(claimed.id, actor));
       await this.syncMemberTask(claimed.teamId, actor, claimed.id);
       this.emit(events.TASK_CLAIMED, { task: claimed, ownerSessionId: actor });
       return claimed;
@@ -903,7 +970,7 @@ export class AgentTeamsService {
       });
       const value = result.value as TeamTask | undefined;
       if (value !== undefined && value.ownerSessionId === actor && value.status === 'in_progress') {
-        this.wakeKeys.delete(`${value.id}:${actor}`);
+        this.clearWakeRetry(this.wakeKey(value.id, actor));
         await this.syncMemberTask(teamId, actor, value.id);
         this.emit(events.TASK_CLAIMED, { task: value, ownerSessionId: actor });
         return { claimed: true, task: value };

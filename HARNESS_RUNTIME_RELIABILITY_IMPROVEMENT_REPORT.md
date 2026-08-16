@@ -157,3 +157,25 @@ real Reviewer and final-completion gates therefore remain **NOT VERIFIED**.
 Updated local gates after the merge: typecheck PASS, build PASS, 112/112 tests
 PASS, client bundle PASS, dynamic host preflight PASS with 47 tools, and clean
 worktree.
+
+## Ready-worker reconciliation addendum — 2026-08-17
+
+Root cause confirmed: scheduling was triggered only by a newly emitted
+`task.ready` transition. A task that was already READY while a teammate
+entered `idle`, or while the plugin was reloaded, could remain silently
+available because no second event was guaranteed.
+
+Fix: `AgentTeamsService` now reconciles ready work when a real member becomes
+idle, after native child binding, after task creation/explicit assignment, and
+at service startup. Wake requests keep a bounded attempt record, retry only
+when the member is idle, and clear their timer/attempt state atomically when a
+claim or delivery failure is observed. This preserves snapshot authority and
+does not create a second member/session.
+
+Validation: local ready-worker creation, idle retry, persisted-ready reload,
+role routing, and atomic claim tests pass. The compiled suite is now **115/115
+tests across 21 suites**. The rebuilt Harness restarted successfully and the
+persisted P0 Team re-rendered without plugin errors. The real Tester remains
+idle with T4 READY because the next provider turn is still blocked by the
+recorded `402 Insufficient Balance` / `QUOTA`; end-to-end Tester claim remains
+unverified rather than being reported as PASS.

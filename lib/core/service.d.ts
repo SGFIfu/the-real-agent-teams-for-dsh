@@ -43,6 +43,11 @@ export declare class AgentTeamsService {
     private readonly teamMutationQueues;
     /** Coalesces duplicate wake-ups while a worker is being nudged. */
     private readonly wakeKeys;
+    /** Bounded liveness retries for a wake that did not result in a claim. */
+    private readonly wakeAttempts;
+    private readonly wakeRetryTimers;
+    private static readonly MAX_WAKE_ATTEMPTS;
+    private static readonly WAKE_RETRY_DELAY_MS;
     constructor(deps: ServiceDeps);
     /** Resolve a team or fail with the typed error. */
     private team;
@@ -154,6 +159,12 @@ export declare class AgentTeamsService {
     private memberCanClaim;
     private requireCapability;
     private refreshReadyTasks;
+    private wakeKey;
+    private clearWakeRetry;
+    private scheduleWakeRetry;
+    private notifyReadyWorkers;
+    /** Re-check authoritative state when a native worker becomes idle. */
+    retryReadyWorkers(teamId: string, sessionId: SessionId): Promise<void>;
     private wakeEligibleWorkers;
     /** Cycle detection over the task graph of one team (DFS with colors). */
     addDependency(teamId: string, taskId: string, dependencyId: string, actor: SessionId): Promise<TeamTask>;

@@ -19,6 +19,50 @@ function runtimeWithWake(calls: Array<{ childId: string; text: string }>): TeamR
 }
 
 describe('runtime reliability invariants', () => {
+  it('wakes an idle eligible member when a ready task is created', async () => {
+    const wakeCalls: Array<{ childId: string; text: string }> = [];
+    const service = new AgentTeamsService({ store: new MemoryStore(), runtime: runtimeWithWake(wakeCalls) });
+    const team = await service.createTeam({ name: 'creation wake', goal: 'wake on task creation', leadSessionId: lead, workspaceId: 'ws' });
+    const backend = await service.registerMember({ teamId: team.id, sessionId: 'backend', name: 'Backend', role: 'backend', actor: lead });
+    await service.updateMember(backend.id, lead, { status: 'idle' });
+
+    const task = await service.createTask({ teamId: team.id, title: 'ready work', description: 'created after worker is ready', assignedRole: 'backend', actor: lead });
+
+    assert.ok(wakeCalls.some((call) => call.childId === 'backend' && call.text.includes(task.id)));
+    await service.claimTask(task.id, 'backend');
+  });
+
+  it('retries a ready-task wake after an idle worker did not claim', async () => {
+    const wakeCalls: Array<{ childId: string; text: string }> = [];
+    const service = new AgentTeamsService({ store: new MemoryStore(), runtime: runtimeWithWake(wakeCalls) });
+    const team = await service.createTeam({ name: 'wake retry', goal: 'retry idle wake', leadSessionId: lead, workspaceId: 'ws' });
+    const backend = await service.registerMember({ teamId: team.id, sessionId: 'backend', name: 'Backend', role: 'backend', actor: lead });
+    await service.updateMember(backend.id, lead, { status: 'idle' });
+    const task = await service.createTask({ teamId: team.id, title: 'retry work', description: 'worker must re-check ready state', assignedRole: 'backend', actor: lead });
+    assert.equal(wakeCalls.filter((call) => call.text.includes(task.id)).length, 1);
+
+    await service.updateMemberFromRuntime(backend.id, { status: 'idle' });
+
+    assert.equal(wakeCalls.filter((call) => call.text.includes(task.id)).length, 2);
+    await service.claimTask(task.id, 'backend');
+  });
+
+  it('reconciles persisted ready work and wakes idle workers after reload', async () => {
+    const store = new MemoryStore();
+    const first = new AgentTeamsService({ store });
+    const team = await first.createTeam({ name: 'reload wake', goal: 'recover ready work', leadSessionId: lead, workspaceId: 'ws' });
+    const backend = await first.registerMember({ teamId: team.id, sessionId: 'backend', name: 'Backend', role: 'backend', actor: lead });
+    await first.updateMember(backend.id, lead, { status: 'idle' });
+    const task = await first.createTask({ teamId: team.id, title: 'persisted work', description: 'ready before reload', assignedRole: 'backend', actor: lead });
+
+    const wakeCalls: Array<{ childId: string; text: string }> = [];
+    const recovered = new AgentTeamsService({ store, runtime: runtimeWithWake(wakeCalls) });
+    await recovered.ready();
+
+    assert.ok(wakeCalls.some((call) => call.childId === 'backend' && call.text.includes(task.id)));
+    await recovered.claimTask(task.id, 'backend');
+  });
+
   it('refreshes dependency readiness and wakes only the assigned role', async () => {
     const wakeCalls: Array<{ childId: string; text: string }> = [];
     const service = new AgentTeamsService({ store: new MemoryStore(), runtime: runtimeWithWake(wakeCalls) });

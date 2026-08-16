@@ -161,3 +161,17 @@ The real dogfood repository retained the initial scaffold commit `ee77cba` plus 
 
 Implementation branch: `feature/runtime-capability-guard` → merge commit
 `28bac54` on `integration/runtime-reliability-v1`.
+
+## Ready-worker reconciliation addendum — 2026-08-17
+
+| Check | Result | Evidence |
+|---|---|---|
+| Ready task created after worker idle | PASS | runtime reliability regression |
+| Idle worker wake retry | PASS | bounded second wake after no claim |
+| Persisted READY task after service reload | PASS | shared-store service recovery regression |
+| Full local suite after reconciliation | PASS | 115/115 tests, 21 suites |
+| Live Tester T4 claim after recovery | NOT VERIFIED | real Lead/provider continuation remains `402 Insufficient Balance` / `QUOTA` |
+
+The recovery implementation is validated locally and the rebuilt Harness
+boots cleanly. The real Team evidence remains deliberately bounded by the
+provider quota: T4 is still READY/idle, so no end-to-end claim is asserted.

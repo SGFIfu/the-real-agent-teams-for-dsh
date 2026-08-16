@@ -243,3 +243,26 @@ acceptance boundary: after the rebuilt Harness restart, the existing P0 Team
 continuation again stopped at `402 Insufficient Balance` / `QUOTA`. Tester
 T4, independent Reviewer T6, fix/re-review, T7, and successful final
 completion remain unverified. Final judgment remains **PARTIALLY IMPROVED**.
+
+## Ready-worker reconciliation — 2026-08-17
+
+Root Cause:
+
+Ready-task wake-up depended on the task's first readiness transition. A
+persisted ready task or a task created after a teammate became idle could have
+no new event to trigger scheduling.
+
+Fix:
+
+Added snapshot-first ready-worker reconciliation on member idle, native child
+binding, task creation/assignment, and service startup. Wake attempts are
+bounded and retry only while the target remains idle; successful claims and
+delivery failures clear retry state.
+
+Validation:
+
+The focused creation, idle-retry, and persisted-reload tests pass. The full
+compiled suite is 115/115. The live P0 Team reloaded successfully, but T4 was
+not claimed because the next real provider turn remained blocked by
+`402 Insufficient Balance` / `QUOTA`; the live E2E gate is therefore NOT
+VERIFIED.
