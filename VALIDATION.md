@@ -169,7 +169,7 @@ Implementation branch: `feature/runtime-capability-guard` → merge commit
 | Ready task created after worker idle | PASS | runtime reliability regression |
 | Idle worker wake retry | PASS | bounded second wake after no claim |
 | Persisted READY task after service reload | PASS | shared-store service recovery regression |
-| Full local suite after reconciliation | PASS | 115/115 tests, 21 suites |
+| Full local suite after reconciliation | PASS | 116/116 tests, 21 suites |
 | Live Tester T4 claim after recovery | NOT VERIFIED | real Lead/provider continuation remains `402 Insufficient Balance` / `QUOTA` |
 
 The recovery implementation is validated locally and the rebuilt Harness

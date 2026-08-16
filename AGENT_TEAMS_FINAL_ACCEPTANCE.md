@@ -227,7 +227,7 @@ startup. Wake requests use bounded retry state and are cleared on claim or
 delivery failure. Local regressions cover task-creation wake, idle retry,
 persisted READY work after reload, role routing, and atomic claim safety.
 
-Validation is **115/115 tests PASS**, typecheck/build/client/dynamic preflight
+Validation is **116/116 tests PASS**, typecheck/build/client/dynamic preflight
 PASS, and the rebuilt Harness booted with no new plugin errors. The live P0
 Team still has Tester T4 READY/idle; its next real control turn is blocked by
 `402 Insufficient Balance` / `QUOTA`. Therefore the real Tester claim,

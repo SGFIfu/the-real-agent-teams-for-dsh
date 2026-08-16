@@ -173,7 +173,7 @@ claim or delivery failure is observed. This preserves snapshot authority and
 does not create a second member/session.
 
 Validation: local ready-worker creation, idle retry, persisted-ready reload,
-role routing, and atomic claim tests pass. The compiled suite is now **115/115
+failed-first-wake recovery, role routing, and atomic claim tests pass. The compiled suite is now **116/116
 tests across 21 suites**. The rebuilt Harness restarted successfully and the
 persisted P0 Team re-rendered without plugin errors. The real Tester remains
 idle with T4 READY because the next provider turn is still blocked by the

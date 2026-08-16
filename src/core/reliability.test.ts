@@ -63,6 +63,30 @@ describe('runtime reliability invariants', () => {
     await recovered.claimTask(task.id, 'backend');
   });
 
+  it('retains a bounded wake retry after the first native followup fails', async () => {
+    const wakeCalls: Array<{ childId: string; text: string }> = [];
+    let failFirstWake = true;
+    const runtime = runtimeWithWake(wakeCalls);
+    runtime.wakeWorker = async (_parent, childId, text) => {
+      if (failFirstWake) {
+        failFirstWake = false;
+        throw new Error('catalog not ready');
+      }
+      wakeCalls.push({ childId, text });
+    };
+    const service = new AgentTeamsService({ store: new MemoryStore(), runtime });
+    const team = await service.createTeam({ name: 'failed wake', goal: 'recover wake failure', leadSessionId: lead, workspaceId: 'ws' });
+    const backend = await service.registerMember({ teamId: team.id, sessionId: 'backend', name: 'Backend', role: 'backend', actor: lead });
+    await service.updateMember(backend.id, lead, { status: 'idle' });
+    const task = await service.createTask({ teamId: team.id, title: 'retry after failure', description: 'native wake initially fails', assignedRole: 'backend', actor: lead });
+    assert.equal(wakeCalls.filter((call) => call.text.includes(task.id)).length, 0);
+
+    await service.updateMemberFromRuntime(backend.id, { status: 'idle' });
+
+    assert.equal(wakeCalls.filter((call) => call.text.includes(task.id)).length, 1);
+    await service.claimTask(task.id, 'backend');
+  });
+
   it('refreshes dependency readiness and wakes only the assigned role', async () => {
     const wakeCalls: Array<{ childId: string; text: string }> = [];
     const service = new AgentTeamsService({ store: new MemoryStore(), runtime: runtimeWithWake(wakeCalls) });

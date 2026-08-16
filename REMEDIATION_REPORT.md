@@ -261,8 +261,8 @@ delivery failures clear retry state.
 
 Validation:
 
-The focused creation, idle-retry, and persisted-reload tests pass. The full
-compiled suite is 115/115. The live P0 Team reloaded successfully, but T4 was
+The focused creation, idle-retry, persisted-reload, and failed-first-wake
+recovery tests pass. The full compiled suite is 116/116. The live P0 Team reloaded successfully, but T4 was
 not claimed because the next real provider turn remained blocked by
 `402 Insufficient Balance` / `QUOTA`; the live E2E gate is therefore NOT
 VERIFIED.
