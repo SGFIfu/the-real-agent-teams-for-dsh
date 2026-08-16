@@ -5,6 +5,7 @@
  * reflects failures in the exit code.
  */
 await import('../lib/core/task.test.js');
+await import('../lib/core/authorization.test.js');
 await import('../lib/core/concurrency.test.js');
 await import('../lib/core/dependencies.test.js');
 await import('../lib/core/messaging.test.js');
