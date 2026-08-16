@@ -44,7 +44,21 @@ export async function makeFixture(memberRoles: Array<{ name: string; role: strin
 /** Dump every table into a plain object (used for restart-persistence tests). */
 export async function dumpStore(store: MemoryStore): Promise<Record<string, Record<string, unknown>>> {
   const dump: Record<string, Record<string, unknown>> = {};
-  for (const table of ['teams', 'members', 'tasks', 'messages', 'plans', 'file_claims', 'findings'] as const) {
+  for (const table of [
+    'teams',
+    'members',
+    'tasks',
+    'messages',
+    'plans',
+    'file_claims',
+    'findings',
+    'workspaces',
+    'git_workspaces',
+    'commits',
+    'review_requests',
+    'review_results',
+    'runtime_events',
+  ] as const) {
     const records = await store.list(table);
     dump[table] = Object.fromEntries(records.map((r) => [r.id, r]));
   }

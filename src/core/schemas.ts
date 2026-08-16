@@ -106,6 +106,88 @@ export const findingSchema = z.object({
   resolvedAt: z.number().optional(),
 });
 
+export const workspaceSchema = z.object({
+  id: idSchema,
+  teamId: idSchema,
+  memberId: idSchema.optional(),
+  taskId: idSchema.optional(),
+  repositoryRoot: z.string().min(1),
+  branch: z.string().min(1),
+  worktreePath: z.string().min(1),
+  status: z.enum(['requested', 'creating', 'ready', 'dirty', 'clean', 'review', 'merged', 'abandoned', 'recoverable']),
+  leaseId: idSchema,
+  createdAt: z.number(),
+  updatedAt: z.number(),
+  lastHeartbeatAt: z.number(),
+});
+
+export const gitWorkspaceSchema = z.object({
+  id: idSchema,
+  workspaceId: idSchema,
+  repositoryRoot: z.string().min(1),
+  branch: z.string().min(1),
+  baseRef: z.string().min(1),
+  worktreePath: z.string().min(1),
+  head: z.string().optional(),
+  changedFiles: z.array(z.string()),
+  status: z.enum(['creating', 'ready', 'dirty', 'clean', 'merged', 'abandoned', 'recoverable']),
+  createdAt: z.number(),
+  updatedAt: z.number(),
+});
+
+export const workspaceCommitSchema = z.object({
+  id: idSchema,
+  teamId: idSchema,
+  workspaceId: idSchema,
+  memberId: idSchema,
+  taskId: idSchema.optional(),
+  hash: z.string().min(1),
+  subject: z.string().min(1),
+  files: z.array(z.string()),
+  createdAt: z.number(),
+});
+
+/** Compatibility alias for callers that refer to the table as commits. */
+export const commitSchema = workspaceCommitSchema;
+
+export const reviewRequestSchema = z.object({
+  id: idSchema,
+  teamId: idSchema,
+  taskId: idSchema,
+  workspaceId: idSchema,
+  requestedBy: sessionIdSchema,
+  reviewerMemberId: idSchema,
+  baseRef: z.string().min(1),
+  headRef: z.string().min(1),
+  status: z.enum(['requested', 'in_review', 'changes_requested', 'approved', 'rejected']),
+  createdAt: z.number(),
+  updatedAt: z.number(),
+});
+
+export const reviewResultSchema = z.object({
+  id: idSchema,
+  requestId: idSchema,
+  reviewerMemberId: idSchema,
+  verdict: z.enum(['approved', 'changes_requested', 'rejected']),
+  evidence: z.array(z.string()),
+  findingIds: z.array(idSchema),
+  createdAt: z.number(),
+});
+
+export const runtimeEventSchema = z.object({
+  id: idSchema,
+  teamId: idSchema,
+  sequence: z.number(),
+  name: z.string().min(1),
+  actorSessionId: sessionIdSchema.optional(),
+  targetSessionId: sessionIdSchema.optional(),
+  visibility: z.enum(['public', 'internal']),
+  payloadVersion: z.literal(1),
+  dedupeKey: z.string().optional(),
+  payload: z.record(z.string(), z.unknown()),
+  createdAt: z.number(),
+});
+
 export const domainSchema = {
   teams: teamSchema,
   members: memberSchema,
@@ -114,6 +196,12 @@ export const domainSchema = {
   plans: planSchema,
   file_claims: fileClaimSchema,
   findings: findingSchema,
+  workspaces: workspaceSchema,
+  git_workspaces: gitWorkspaceSchema,
+  commits: workspaceCommitSchema,
+  review_requests: reviewRequestSchema,
+  review_results: reviewResultSchema,
+  runtime_events: runtimeEventSchema,
 } as const;
 
 export type DomainTables = typeof domainSchema;

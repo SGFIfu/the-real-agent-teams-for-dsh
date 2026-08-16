@@ -19,5 +19,11 @@ export const agentTeamsDomain = defineDomain({
     plans: domainTable(domainSchema.plans),
     file_claims: domainTable(domainSchema.file_claims),
     findings: domainTable(domainSchema.findings),
+    workspaces: domainTable(domainSchema.workspaces),
+    git_workspaces: domainTable(domainSchema.git_workspaces),
+    commits: domainTable(domainSchema.commits),
+    review_requests: domainTable(domainSchema.review_requests),
+    review_results: domainTable(domainSchema.review_results),
+    runtime_events: domainTable(domainSchema.runtime_events),
   },
 });

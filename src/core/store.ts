@@ -8,9 +8,36 @@
  * routes the `agent_teams` domain to.
  * @module dsh-agent-teams/core
  */
-import type { AgentTeam, TeamMember, TeamTask, TeamMessage, TeamPlan, FileClaim, ReviewFinding } from './types.ts';
+import type {
+  AgentTeam,
+  TeamMember,
+  TeamTask,
+  TeamMessage,
+  TeamPlan,
+  FileClaim,
+  ReviewFinding,
+  TeamWorkspace,
+  GitWorkspace,
+  WorkspaceCommit,
+  ReviewRequest,
+  ReviewResult,
+  RuntimeEvent,
+} from './types.ts';
 
-export type TableName = 'teams' | 'members' | 'tasks' | 'messages' | 'plans' | 'file_claims' | 'findings';
+export type TableName =
+  | 'teams'
+  | 'members'
+  | 'tasks'
+  | 'messages'
+  | 'plans'
+  | 'file_claims'
+  | 'findings'
+  | 'workspaces'
+  | 'git_workspaces'
+  | 'commits'
+  | 'review_requests'
+  | 'review_results'
+  | 'runtime_events';
 
 export type RecordOf<T extends TableName> = T extends 'teams'
   ? AgentTeam
@@ -26,6 +53,18 @@ export type RecordOf<T extends TableName> = T extends 'teams'
             ? FileClaim
             : T extends 'findings'
               ? ReviewFinding
+              : T extends 'workspaces'
+                ? TeamWorkspace
+                : T extends 'git_workspaces'
+                  ? GitWorkspace
+                  : T extends 'commits'
+                    ? WorkspaceCommit
+                    : T extends 'review_requests'
+                      ? ReviewRequest
+                      : T extends 'review_results'
+                        ? ReviewResult
+                        : T extends 'runtime_events'
+                          ? RuntimeEvent
               : never;
 
 export type TableFilter<T extends TableName> = (record: RecordOf<T>) => boolean;
@@ -61,7 +100,21 @@ export class MemoryStore implements TeamStore {
   private readonly tables = new Map<TableName, Map<string, unknown>>();
 
   constructor(seed?: Partial<Record<TableName, Record<string, unknown>>>) {
-    for (const name of ['teams', 'members', 'tasks', 'messages', 'plans', 'file_claims', 'findings'] as TableName[]) {
+    for (const name of [
+      'teams',
+      'members',
+      'tasks',
+      'messages',
+      'plans',
+      'file_claims',
+      'findings',
+      'workspaces',
+      'git_workspaces',
+      'commits',
+      'review_requests',
+      'review_results',
+      'runtime_events',
+    ] as TableName[]) {
       const map = new Map<string, unknown>();
       for (const [key, value] of Object.entries(seed?.[name] ?? {})) map.set(key, value);
       this.tables.set(name, map);
