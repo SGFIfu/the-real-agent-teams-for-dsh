@@ -215,3 +215,11 @@ Validation:
 ## Release Decision
 
 The repaired code is materially stronger than the 63/100 baseline and all protected core regression tests pass. It is not yet a Qualified release because real provider quota prevented Reviewer/fix/re-review and final completion success evidence. Live public child-session events and tool activity are now proven; no PASS is awarded for the remaining missing Reviewer/persistent-closure gates.
+
+## P0 Reliability Hardening Addendum — 2026-08-16
+
+The latest change set adds provider/model separation, real-session-first registration, persistent lifecycle and wake hooks, explicit eligibility, bounded capabilities, queued message delivery/retry, and malformed Team-list protection. Local validation is green: typecheck PASS, build PASS, `109/109` tests PASS, client bundle PASS, and dynamic host preflight PASS with 47 tools.
+
+Real Team `team_00000001_45752fca` used four DeepSeek V4 Flash child sessions with native `spawn` and proved plan reject/revise/approve, same-session T3→T5 self-claim, native peer delivery, real file conflict/handoff, and restart persistence. The next Lead turn stopped on the real provider error `402 Insufficient Balance` / `QUOTA`; Tester T4, Reviewer, fix/re-review, final validation and successful completion were not executed. Latest decision: **PARTIALLY IMPROVED**, not QUALIFIED.
+
+Full evidence: [HARNESS_RUNTIME_RELIABILITY_IMPROVEMENT_REPORT.md](HARNESS_RUNTIME_RELIABILITY_IMPROVEMENT_REPORT.md).

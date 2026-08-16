@@ -22,6 +22,7 @@ export interface BridgeDeps {
         updateMemberFromRuntime(memberId: string, patch: {
             status?: 'starting' | 'working' | 'idle' | 'blocked' | 'reviewing' | 'stopped' | 'failed';
         }): Promise<unknown>;
+        retryPendingMessages(teamId: string, sessionId?: string): Promise<unknown>;
         listTeams(): Promise<Array<{
             id: string;
             leadSessionId: string;

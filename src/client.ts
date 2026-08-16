@@ -897,7 +897,11 @@ export function apply(ctx: any): void {
   };
   const bridge: Bridge = {
     async listTeams() {
-      return (await readResponse(await fetch('/agent-teams/teams', { credentials: 'same-origin' }))) as Array<{ id: string; name?: string; goal?: string; status?: string }>;
+      const body = await readResponse(await fetch('/agent-teams/teams', { credentials: 'same-origin' }));
+      if (Array.isArray(body)) return body as Array<{ id: string; name?: string; goal?: string; status?: string }>;
+      const teams = body !== null && typeof body === 'object' ? (body as { teams?: unknown }).teams : undefined;
+      if (Array.isArray(teams)) return teams as Array<{ id: string; name?: string; goal?: string; status?: string }>;
+      throw new Error('Agent Teams list response was not an array');
     },
     async snapshot(teamId: string) {
       return readResponse(await fetch(`/agent-teams/team/${encodeURIComponent(teamId)}/snapshot`, { credentials: 'same-origin' }));
@@ -974,7 +978,7 @@ export function apply(ctx: any): void {
       const refresh = async () => {
         try {
           const list = await bridge.listTeams();
-          if (alive) setTeams(list);
+          if (alive && Array.isArray(list)) setTeams(list);
         } catch {
           /* keep last */
         }
@@ -986,7 +990,7 @@ export function apply(ctx: any): void {
         id();
       };
     }, []);
-    const selectedExists = selectedTeamId !== null && teams.some((team) => team.id === selectedTeamId);
+    const selectedExists = selectedTeamId !== null && Array.isArray(teams) && teams.some((team) => team.id === selectedTeamId);
     return React.createElement(React.Fragment, null,
       React.createElement('button', { className: 'agc-btn', onClick: () => setOpen((v: boolean) => !v) }, open ? 'Close Teams' : 'Teams'),
       open && selectedTeamId !== null && selectedExists && React.createElement(CommandCenter, { bridge, ctx, teamId: selectedTeamId, onBack: () => selectTeam(null), onClose: () => setOpen(false) }),

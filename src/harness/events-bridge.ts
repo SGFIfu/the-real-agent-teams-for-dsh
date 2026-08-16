@@ -31,6 +31,7 @@ export interface BridgeDeps {
       memberId: string,
       patch: { status?: 'starting' | 'working' | 'idle' | 'blocked' | 'reviewing' | 'stopped' | 'failed' },
     ): Promise<unknown>;
+    retryPendingMessages(teamId: string, sessionId?: string): Promise<unknown>;
     listTeams(): Promise<Array<{ id: string; leadSessionId: string }>>;
   };
 }
@@ -64,6 +65,7 @@ export function bridgeNativeEvents(deps: BridgeDeps): Array<() => void> {
         if (member === undefined) return;
         const patch = payload.status === 'running' ? { status: 'working' as const } : { status: 'idle' as const };
         await deps.service.updateMemberFromRuntime(member.id, patch);
+        await deps.service.retryPendingMessages(member.teamId, sessionId);
       })().catch(() => undefined);
     }),
   );
@@ -80,6 +82,7 @@ export function bridgeNativeEvents(deps: BridgeDeps): Array<() => void> {
         // preserves working/blocked when it still owns a task.
         const status = info.stopReason === 'error' || info.stopReason === 'aborted' ? 'failed' as const : 'idle' as const;
         await deps.service.updateMemberFromRuntime(member.id, { status });
+        if (status === 'idle') await deps.service.retryPendingMessages(member.teamId, sessionId);
       })().catch(() => undefined);
     }),
   );

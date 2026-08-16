@@ -61,6 +61,28 @@ export type MemberStatus =
   | 'stopped'
   | 'failed';
 
+export type MemberLifecycleState =
+  | 'starting'
+  | 'ready'
+  | 'waiting_for_task'
+  | 'claiming'
+  | 'working'
+  | 'reporting'
+  | 'blocked'
+  | 'waiting_for_review'
+  | 'stopped'
+  | 'failed'
+  | 'cancelled';
+
+export type AgentCapability =
+  | 'repo.read'
+  | 'repo.write.owned'
+  | 'process.test'
+  | 'process.build'
+  | 'git.read'
+  | 'git.commit.own-branch'
+  | 'review.verify';
+
 export interface TeamMember {
   id: TeamMemberId;
   teamId: TeamId;
@@ -69,10 +91,14 @@ export interface TeamMember {
   name: string;
   role: string;
   status: MemberStatus;
+  lifecycleState?: MemberLifecycleState;
   currentTaskId?: TaskId;
   provider?: string;
+  modelProvider?: string;
   model?: string;
   capabilities?: string[];
+  workspaceId?: string;
+  eventCursor?: number;
   joinedAt: number;
   lastActiveAt: number;
 }
@@ -86,6 +112,8 @@ export type TaskStatus =
   | 'failed'
   | 'cancelled';
 
+export type TaskAvailability = 'locked' | 'ready';
+
 export type TaskPriority = 'critical' | 'high' | 'normal' | 'low';
 
 export interface TeamTask {
@@ -95,8 +123,13 @@ export interface TeamTask {
   description: string;
   status: TaskStatus;
   priority: TaskPriority;
+  availability?: TaskAvailability;
   /** Harness session id of the owner, set atomically by claim. */
   ownerSessionId?: SessionId;
+  assignedMemberId?: TeamMemberId;
+  assignedRole?: string;
+  requiredCapabilities?: AgentCapability[];
+  workspaceId?: string;
   dependencies: TaskId[];
   requiresPlan: boolean;
   /** Required tasks count toward progress and the completion guard. */
@@ -128,8 +161,15 @@ export interface TeamMessage {
   body: string;
   createdAt: number;
   /** Native delivery lifecycle. Legacy records may omit this field. */
-  deliveryState?: 'pending' | 'delivered' | 'failed';
+  deliveryState?: 'pending' | 'queued' | 'delivering' | 'delivered' | 'acknowledged' | 'failed';
   deliveryTransport?: 'native-followup' | 'native-report' | 'durable-inbox';
+  deliveryAttempt?: number;
+  deliveryTargets?: Record<string, {
+    state: 'pending' | 'queued' | 'delivering' | 'delivered' | 'acknowledged' | 'failed';
+    attempts: number;
+    deliveredAt?: number;
+    error?: string;
+  }>;
   deliveredAt?: number;
   deliveryError?: string;
 }
@@ -313,6 +353,8 @@ export interface TeamProgress {
 // ── spawn & followup descriptions (harness adapter inputs) ──────────────────
 export interface SpawnSpec {
   provider: string;
+  modelProvider?: string;
+  model?: string;
   label: string;
   /** Plain text of the initial prompt (adapter converts to content blocks). */
   promptText: string;
@@ -331,10 +373,23 @@ export interface SpawnResult {
 
 /** The narrow capability surface the service needs from the harness. */
 export interface TeamRuntimeAdapter {
+  /** Resolve model aliases and validate a provider before durable member creation. */
+  resolveAgentSpec?(input: { model?: string; modelProvider?: string; provider?: string }): {
+    requestedModel?: string;
+    requestedModelProvider?: string;
+    resolvedModelProvider?: string;
+    resolvedModel?: string;
+    requestedProvider?: string;
+    resolvedProvider: string;
+    alias?: string;
+    availableProviders: string[];
+  };
   startContinuable(spec: SpawnSpec): Promise<SpawnResult>;
   /** Deliver through the native parent authority while preserving sender attribution. */
   followup(parent: unknown, childId: SessionId, text: string, senderSessionId?: SessionId): Promise<void>;
   reportFrom(child: unknown, text: string): Promise<void>;
+  /** Wake a waiting child after authoritative task state changes. */
+  wakeWorker?(parent: unknown, childId: SessionId, text: string, senderSessionId?: SessionId): Promise<void>;
   interrupt(targetSessionId: SessionId, ancestor: unknown): void;
   listChildrenOf(parentSessionId: SessionId): Promise<Array<{ sessionId: SessionId; label?: string }>>;
 }

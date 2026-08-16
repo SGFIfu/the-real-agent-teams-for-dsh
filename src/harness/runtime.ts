@@ -10,11 +10,13 @@ import type { SessionId } from '@deepseek-ai/dsh-session';
 import type { SubagentRuntime } from '@deepseek-ai/dsh-subagent';
 import { TeamError, teamError } from '../core/errors.ts';
 import type { SpawnResult, SpawnSpec, TeamRuntimeAdapter } from '../core/types.ts';
+import { resolveAgentSpec, type ResolvedAgentSpec } from './provider-resolution.ts';
 
 export interface RuntimeDeps {
   ctx: Context;
   subagents?: SubagentRuntime;
   defaultProvider: string;
+  defaultModel?: string;
 }
 
 function textBlock(text: string): Array<{ type: 'text'; text: string }> {
@@ -29,6 +31,15 @@ function liveAgent(ctx: Context, sessionId: string): Agent | undefined {
 
 export class HarnessRuntimeAdapter implements TeamRuntimeAdapter {
   constructor(private readonly deps: RuntimeDeps) {}
+
+  resolveAgentSpec(input: { model?: string; modelProvider?: string; provider?: string }): ResolvedAgentSpec {
+    const subagents = this.requireSubagents();
+    return resolveAgentSpec(input, {
+      availableProviders: subagents.list(),
+      defaultProvider: this.deps.defaultProvider,
+      defaultModel: this.deps.defaultModel,
+    });
+  }
 
   private requireSubagents(): SubagentRuntime {
     if (this.deps.subagents === undefined) {
@@ -46,9 +57,10 @@ export class HarnessRuntimeAdapter implements TeamRuntimeAdapter {
     const leadId = handle?.__teamLeadSessionId;
     const lead = leadId === undefined ? undefined : liveAgent(this.deps.ctx, leadId);
     if (lead === undefined) throw teamError('SUBAGENT_UNAVAILABLE', `lead agent ${leadId} is not live`);
+    const resolved = this.resolveAgentSpec({ model: spec.model, modelProvider: spec.modelProvider, provider: spec.provider });
     try {
       const start = await subagents.startContinuable({
-        provider: spec.provider || this.deps.defaultProvider,
+        provider: resolved.resolvedProvider,
         label: spec.label,
         request: {
           prompt: textBlock(spec.promptText),
@@ -56,6 +68,7 @@ export class HarnessRuntimeAdapter implements TeamRuntimeAdapter {
           ...(spec.maxDepth !== undefined ? { maxDepth: spec.maxDepth } : {}),
           ...(spec.toolFilter !== undefined ? { toolFilter: spec.toolFilter } : {}),
           ...(spec.persona !== undefined ? { persona: spec.persona } : {}),
+          ...(resolved.resolvedModel !== undefined || resolved.resolvedModelProvider !== undefined ? { agentOptions: { ...(resolved.resolvedModelProvider === undefined ? {} : { provider: resolved.resolvedModelProvider }), ...(resolved.resolvedModel === undefined ? {} : { model: resolved.resolvedModel }) } } : {}),
         },
         signal: spec.signal ?? new AbortController().signal,
       });
@@ -64,9 +77,15 @@ export class HarnessRuntimeAdapter implements TeamRuntimeAdapter {
       if (error instanceof TeamError) throw error;
       const message = error instanceof Error ? error.message : String(error);
       if (/capab/i.test(message)) {
-        throw teamError('SUBAGENT_CAPABILITY_UNSUPPORTED', `provider does not support a requested capability: ${message}`, { provider: spec.provider });
-      }
-      throw teamError('SUBAGENT_UNAVAILABLE', `failed to start continuable teammate: ${message}`, { provider: spec.provider });
+        throw teamError('SUBAGENT_CAPABILITY_UNSUPPORTED', 'provider does not support a requested capability: ' + message, { provider: resolved.resolvedProvider });
+     }
+      throw teamError('SUBAGENT_UNAVAILABLE', 'failed to start continuable teammate: ' + message, {
+        requestedModel: spec.model,
+        resolvedModel: resolved.resolvedModel,
+        requestedProvider: spec.provider,
+        resolvedProvider: resolved.resolvedProvider,
+        availableProviders: resolved.availableProviders,
+      });
     }
   }
 
@@ -104,6 +123,10 @@ export class HarnessRuntimeAdapter implements TeamRuntimeAdapter {
       const message = error instanceof Error ? error.message : String(error);
       throw teamError('SUBAGENT_UNAVAILABLE', `report delivery failed: ${message}`, { sessionId });
     }
+  }
+
+  async wakeWorker(parent: unknown, childId: string, text: string, senderSessionId?: string): Promise<void> {
+    await this.followup(parent, childId, text, senderSessionId);
   }
 
   interrupt(targetSessionId: string, ancestor: unknown): void {

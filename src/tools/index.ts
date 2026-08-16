@@ -218,7 +218,10 @@ export function registerTeamTools(deps: ToolsDeps): Array<() => void> {
           teamId: stringProp('Team id'),
           role: stringProp('Role, e.g. backend, frontend, tester, reviewer, architect'),
           name: optionalStringProp('Display name (defaults to role)'),
-          provider: optionalStringProp('Subagent provider (default: team default)'),
+          provider: optionalStringProp('Native subagent runtime provider, e.g. spawn'),
+          modelProvider: optionalStringProp('Model provider passed to the child AgentOptions'),
+          model: optionalStringProp('Model alias or model id, e.g. v4-flash or deepseek-v4-flash'),
+          capabilities: arrayOfStrings('Optional bounded capability set; omitted uses the role policy'),
           taskId: optionalStringProp('Initial task id to assign (optional)'),
         },
         ['teamId', 'role'],
@@ -229,25 +232,24 @@ export function registerTeamTools(deps: ToolsDeps): Array<() => void> {
         const runtime = s.runtime;
         if (runtime === undefined) throw new TeamError('SUBAGENT_UNAVAILABLE', 'subagent runtime not mounted in this process');
         const initialTask: TeamTask | undefined = args.taskId === undefined ? undefined : await s.getTask(args.taskId, actor);
-        // Unique placeholder identity; the harness assigns the real session id
-        // once the continuable child is established (concurrent spawns safe).
-        const placeholderSessionId = `__pending_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
-        const member = await s.registerMember({ teamId: args.teamId, sessionId: placeholderSessionId, name, role: args.role, provider: args.provider, actor });
+        const resolved = runtime.resolveAgentSpec?.({ model: args.model, modelProvider: args.modelProvider, provider: args.provider });
+        const provider = resolved?.resolvedProvider ?? args.provider ?? s.defaultProvider;
+        const model = resolved?.resolvedModel ?? args.model;
+        const spawn = await runtime.startContinuable({
+          provider,
+          modelProvider: resolved?.resolvedModelProvider ?? args.modelProvider,
+          model,
+          label: name,
+          promptText: teammatePrompt({ team, role: args.role, name, initialTask }),
+          parent: leadHandle(team.leadSessionId),
+          signal: exec.signal,
+        });
         try {
-          const spawn = await runtime.startContinuable({
-            provider: args.provider ?? s.defaultProvider,
-            label: name,
-            promptText: teammatePrompt({ team, role: args.role, name, initialTask }),
-            parent: leadHandle(team.leadSessionId),
-            // The tool-call cancellation signal: the spawn observes it without
-            // creating an AbortController global (works in confined sandboxes).
-            signal: exec.signal,
-          });
-          // The harness owns the real session identity: rewrite the placeholder.
-          await s.bindMemberSession(member.id, spawn.childId, actor);
-          return { memberId: member.id, sessionId: spawn.childId, messageId: spawn.messageId };
+          const member = await s.registerMember({ teamId: args.teamId, sessionId: spawn.childId, name, role: args.role, provider, modelProvider: resolved?.resolvedModelProvider ?? args.modelProvider, model, capabilities: args.capabilities, actor });
+          if (args.taskId !== undefined) await s.assignTask(args.taskId, member.id, actor);
+          return { memberId: member.id, sessionId: spawn.childId, messageId: spawn.messageId, model, provider, capabilities: member.capabilities };
         } catch (error) {
-          await s.markMemberSpawnFailed(member.id, actor);
+          try { runtime.interrupt(spawn.childId, leadHandle(team.leadSessionId)); } catch { }
           throw error;
         }
       },
@@ -265,10 +267,13 @@ export function registerTeamTools(deps: ToolsDeps): Array<() => void> {
           sessionId: stringProp('Real harness session id of the member'),
           name: stringProp('Display name'),
           role: stringProp('Role'),
+          modelProvider: optionalStringProp('Model provider'),
+          model: optionalStringProp('Model id or alias'),
+          capabilities: arrayOfStrings('Optional bounded capability set'),
         },
         ['teamId', 'sessionId', 'name', 'role'],
       ),
-      (args, actor, s) => s.registerMember({ teamId: args.teamId, sessionId: args.sessionId, name: args.name, role: args.role, actor }),
+      (args, actor, s) => s.registerMember({ teamId: args.teamId, sessionId: args.sessionId, name: args.name, role: args.role, modelProvider: args.modelProvider, model: args.model, capabilities: args.capabilities, actor }),
     ),
   );
 
@@ -304,6 +309,10 @@ export function registerTeamTools(deps: ToolsDeps): Array<() => void> {
           dependencies: arrayOfStrings('Task ids that must complete first'),
           requiresPlan: { type: 'boolean', description: 'Task needs an approved plan before implementation' },
           required: { type: 'boolean', description: 'Counts toward team completion (default true)' },
+          assignedMemberId: optionalStringProp('Explicit teammate member id'),
+          assignedRole: optionalStringProp('Explicit teammate role'),
+          requiredCapabilities: arrayOfStrings('Capabilities required to claim this task'),
+          workspaceId: optionalStringProp('Workspace lease id'),
         },
         ['teamId', 'title', 'description'],
       ),
@@ -316,6 +325,10 @@ export function registerTeamTools(deps: ToolsDeps): Array<() => void> {
           dependencies: args.dependencies,
           requiresPlan: args.requiresPlan,
           required: args.required,
+          assignedMemberId: args.assignedMemberId,
+          assignedRole: args.assignedRole,
+          requiredCapabilities: args.requiredCapabilities,
+          workspaceId: args.workspaceId,
           actor,
         }),
     ),

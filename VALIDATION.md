@@ -95,3 +95,55 @@ Adapter benchmark normalized 6 agents, 50 tasks and 200 activity/message events 
 ## Acceptance decision
 
 The implementation has reliable tested coordination primitives, a functional selected-Team UI, and real public child-session/tool evidence from the prior funded run. Live Persistent Teammates, Reviewer Loop, and final completion success remain unproven because that provider run returned repeated quota failures. Runtime event append is explicitly process-local/non-atomic across processes, and Harness caller-principal/RBAC is not exposed by the current WebServer API. New score: **84 / 100, PARTIALLY QUALIFIED**. It must not be labeled Qualified or published as production-ready without a funded real-provider run and those production-boundary decisions being closed.
+
+## P0 Reliability Hardening Validation — 2026-08-16
+
+| Check | Result | Evidence |
+|---|---|---|
+| Harness version | PASS | `@deepseek-ai/dsh 0.1.0-rc.6` |
+| Agent Teams version | PASS | `0.1.0` from `C:\知识库\dsh-agent-teams` |
+| Node / pnpm / OS | PASS | Node `v24.16.0`, pnpm `11.19.0`, Windows 11 build `10.0.26200.0` |
+| Typecheck | PASS | `rtk npm run typecheck` |
+| Build | PASS | `rtk npm run build` |
+| Tests | PASS | `109/109`, 20 suites, 0 failures |
+| Client Registration | PASS | client bundle test plus live Teams button |
+| Dynamic host preflight | PASS | `47 tools`, routes, SSE and actions |
+| Atomic concurrency | PASS | 50-way and multi-agent claim regressions; 0 duplicate owners |
+| Dependency enforcement | PASS | dependency/cycle regression suite |
+| Persistence | PASS | real restart retained P0 Team, members, tasks, plans, messages, claims and progress |
+| Session Privacy | PASS | real Inspector showed 141 public events and typed reasoning hidden |
+| Provider/model separation | PASS | real members used provider `spawn`, model `deepseek-v4-flash` |
+| Persistent Teammates | PASS for same-session reuse | Frontend T3 → T5 used session `7be65a14-7829-48c3-a13a-b622b9e3616a`; full final closure PARTIAL |
+| Peer Messaging | PASS | real native-followup deliveries with target session evidence |
+| Self Claim | PASS | Frontend self-claimed T5 after T3 on the same session |
+| Plan Guard | PASS | real v1 reject → v2 resubmit → approve; service hard guard tests pass |
+| File Claims | PASS | real `FILE_CLAIM_CONFLICT` then release/handoff |
+| Capability Policy | PASS | Architect write claim returned typed `CAPABILITY_DENIED` |
+| Reviewer | NOT VERIFIED | provider quota stopped before Reviewer activation |
+| Completion Guard | PARTIAL | guard regression and prior live rejection pass; final success not reached in this run |
+| Security | PASS for plugin boundary | auth/CSRF/cross-Team/traversal/impersonation tests pass |
+| Real Team | PARTIAL | `team_00000001_45752fca`; 3/7 tasks complete when quota stopped Lead |
+| Team Workspace | PASS | correct selected Team, real nodes, graph, feed, Inspector after restart |
+| Live Session | PASS | real Frontend Inspector bound to session id, 141 public events/tool rows |
+| Human Steering | NOT VERIFIED in this run | previous real run and service route tests pass; no new human message sent after quota stop |
+
+### Exact real Team identity
+
+Team: `team_00000001_45752fca`  
+Lead: `session-2294edb9-cfb9-4b53-8c8b-8adca8528942`  
+Architect: `ab9910a2-4483-4a08-87d2-6c8dcf6fc501`  
+Backend: `e0af835b-6f14-4ecc-a526-ee5add102cc9`  
+Frontend: `7be65a14-7829-48c3-a13a-b622b9e3616a`  
+Tester: `32371bb1-9973-4679-81b4-c4cbf069e5cd`
+
+### Dogfood stop reason
+
+The Lead's next control turn returned the real provider error `402 Insufficient Balance`, `code=QUOTA`. The UI showed four queued messages. T4, Reviewer, fix/re-review, final validation, and final `team_complete` were not claimed as successful.
+
+### Final P0 judgment
+
+**PARTIALLY IMPROVED.** Local invariants and real runtime evidence improved materially; a funded second run is still required for the remaining Tester wake-up, Reviewer, fix/re-review, and final completion gates.
+
+### Dogfood Git observation
+
+The real dogfood repository retained the initial scaffold commit `ee77cba` plus uncommitted worker files (`server.js`, `lib/`, `shared/`, `public/`, `docs/`). No worker branch/focused commit was observed before the provider quota stop; this is recorded as a workflow finding rather than converted into a false PASS.

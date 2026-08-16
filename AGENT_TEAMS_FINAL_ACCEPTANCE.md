@@ -197,3 +197,9 @@ None observed in the repaired plugin invariants. C12 is fixed in the Agent Teams
 ## Final Verdict
 
 dsh-agent-teams is now a genuine coordination implementation with real Team state, independent sessions, atomic claims, dependency enforcement, native peer delivery, file conflicts, plan guards, persistence, and a selected-Team UI. The real Inspector now exposes the selected child’s typed public assistant/tool trajectory without hidden reasoning. It is still not a Qualified release because the real provider stopped before persistent work closure, Reviewer/fix/re-review, and final completion success; it remains **PARTIALLY QUALIFIED**, not a decorative multi-subagent shell.
+
+## P0 Reliability Hardening Addendum — 2026-08-16
+
+Latest Team: `team_00000001_45752fca`. Four real DeepSeek V4 Flash child sessions using native `spawn` proved provider/model separation, plan reject/revise/approve, native peer delivery, real file conflict/handoff, and Frontend T3 → same-session T5 self-claim. A real Harness restart preserved the Team, members, tasks, plans, messages, claims and progress; the UI reopened the correct Team and privacy-safe Inspector.
+
+The next Lead control turn returned the real provider error `402 Insufficient Balance` / `QUOTA`. Tester T4, independent Reviewer, fix/re-review, final validation and final completion were not executed. The latest release judgment is **PARTIALLY IMPROVED**, not QUALIFIED. Full evidence is in `HARNESS_RUNTIME_RELIABILITY_IMPROVEMENT_REPORT.md`.

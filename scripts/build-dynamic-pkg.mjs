@@ -41,8 +41,10 @@ function compact(source) {
 
 const hostModules = [
   ['lib/core/errors.js', {}],
+  ['lib/harness/provider-resolution.js', {}],
   ['lib/core/ids.js', {}],
   ['lib/core/events.js', {}],
+  ['lib/core/capabilities.js', {}],
   ['lib/core/store.js', {}],
   ['lib/core/service.js', { namespace: true }],
   ['lib/core/prompts.js', {}],
@@ -53,6 +55,19 @@ const hostModules = [
 
 const hostGlue = `
 // ── dynamic sandbox glue (pkg-6: Animated AI Team Command Center) ──────
+const isIP = (address) => /^\\d{1,3}(?:\\.\\d{1,3}){3}$/.test(address) ? 4 : (typeof address === 'string' && address.includes(':') ? 6 : 0);
+const randomBytes = (size) => {
+  const bytes = new Uint8Array(size);
+  if (globalThis.crypto === undefined || typeof globalThis.crypto.getRandomValues !== 'function') throw new Error('secure random source unavailable');
+  globalThis.crypto.getRandomValues(bytes);
+  return { toString: (encoding) => encoding === 'base64url' ? globalThis.btoa(String.fromCharCode(...bytes)).replace(/\\+/g, '-').replace(/\\//g, '_').replace(/=+$/g, '') : String.fromCharCode(...bytes) };
+};
+const timingSafeEqual = (a, b) => {
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i += 1) diff |= a[i] ^ b[i];
+  return diff === 0;
+};
 const leadHandle = (sessionId) => ({ __teamLeadSessionId: sessionId });
 const memberHandle = (sessionId) => ({ __teamMemberSessionId: sessionId });
 
@@ -100,11 +115,19 @@ return {
         const leadId = spec.parent !== undefined && spec.parent.__teamLeadSessionId !== undefined ? spec.parent.__teamLeadSessionId : undefined;
         const lead = leadId === undefined ? undefined : ctx.agents.get(leadId);
         if (lead === undefined) throw teamError('SUBAGENT_UNAVAILABLE', 'lead agent ' + leadId + ' is not live');
+        const resolved = resolveAgentSpec({ model: spec.model, modelProvider: spec.modelProvider, provider: spec.provider }, { availableProviders: ctx.subagents.list(), defaultProvider: 'spawn', defaultModel: 'deepseek-v4-flash' });
         try {
           const start = await ctx.subagents.startContinuable({
-            provider: spec.provider || 'spawn',
+            provider: resolved.resolvedProvider,
             label: spec.label,
-            request: { prompt: [{ type: 'text', text: spec.promptText }], parent: lead },
+            request: {
+              prompt: [{ type: 'text', text: spec.promptText }],
+              parent: lead,
+              ...(spec.maxDepth !== undefined ? { maxDepth: spec.maxDepth } : {}),
+              ...(spec.toolFilter !== undefined ? { toolFilter: spec.toolFilter } : {}),
+              ...(spec.persona !== undefined ? { persona: spec.persona } : {}),
+              ...(resolved.resolvedModel !== undefined || resolved.resolvedModelProvider !== undefined ? { agentOptions: { ...(resolved.resolvedModelProvider === undefined ? {} : { provider: resolved.resolvedModelProvider }), ...(resolved.resolvedModel === undefined ? {} : { model: resolved.resolvedModel }) } } : {}),
+            },
             signal: spec.signal,
           });
           return { childId: start.childId, messageId: start.messageId };
@@ -112,12 +135,12 @@ return {
           throw teamError('SUBAGENT_UNAVAILABLE', 'failed to start continuable teammate: ' + (error instanceof Error ? error.message : String(error)));
         }
       },
-      async followup(handle, childId, text) {
+      async followup(handle, childId, text, senderSessionId) {
         const leadId = handle !== undefined && handle.__teamLeadSessionId !== undefined ? handle.__teamLeadSessionId : undefined;
         const lead = leadId === undefined ? undefined : ctx.agents.get(leadId);
         if (lead === undefined) throw teamError('SUBAGENT_UNAVAILABLE', 'lead agent ' + leadId + ' is not live');
         await ctx.subagents.followup(lead, childId, [{ type: 'text', text }], {
-          source: { kind: 'coordinator', form: 'relay', senderSessionId: leadId },
+          source: { kind: 'coordinator', form: 'relay', senderSessionId: senderSessionId || leadId },
           signal: currentSignal,
         });
       },
@@ -126,6 +149,15 @@ return {
         const agent = sessionId === undefined ? undefined : ctx.agents.get(sessionId);
         if (agent === undefined) throw teamError('SUBAGENT_UNAVAILABLE', 'member agent ' + sessionId + ' is not live');
         await ctx.subagents.reportFrom(agent, [{ type: 'text', text }], { delivery: 'quiet', signal: currentSignal });
+      },
+      async wakeWorker(handle, childId, text, senderSessionId) {
+        const leadId = handle !== undefined && handle.__teamLeadSessionId !== undefined ? handle.__teamLeadSessionId : undefined;
+        const lead = leadId === undefined ? undefined : ctx.agents.get(leadId);
+        if (lead === undefined) throw teamError('SUBAGENT_UNAVAILABLE', 'lead agent ' + leadId + ' is not live');
+        await ctx.subagents.followup(lead, childId, [{ type: 'text', text }], {
+          source: { kind: 'coordinator', form: 'relay', senderSessionId: senderSessionId || leadId },
+          signal: currentSignal || new AbortController().signal,
+        });
       },
       interrupt(targetSessionId, handle) {
         const leadId = handle !== undefined && handle.__teamLeadSessionId !== undefined ? handle.__teamLeadSessionId : undefined;
@@ -215,7 +247,7 @@ return {
       ),
     );
 
-    console.log('[agent-teams] The real agent teams live (pkg-6: Animated Command Center) — 36 tools + /agent-teams routes + SSE + panel');
+    console.log('[agent-teams] The real agent teams live (pkg-6: Animated Command Center) — 47 tools + /agent-teams routes + SSE + panel');
     return () => {
       for (const dispose of disposers.reverse()) {
         try {

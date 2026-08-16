@@ -21,10 +21,14 @@ export declare const agentTeamsDomain: {
             status: "working" | "blocked" | "reviewing" | "idle" | "failed" | "starting" | "stopped";
             joinedAt: number;
             lastActiveAt: number;
+            lifecycleState?: "working" | "blocked" | "failed" | "starting" | "stopped" | "ready" | "waiting_for_task" | "claiming" | "reporting" | "waiting_for_review" | "cancelled" | undefined;
             currentTaskId?: string | undefined;
             provider?: string | undefined;
+            modelProvider?: string | undefined;
             model?: string | undefined;
             capabilities?: string[] | undefined;
+            workspaceId?: string | undefined;
+            eventCursor?: number | undefined;
         }>;
         tasks: import("@deepseek-ai/dsh-storage-domain").DomainTableSpec<string, {
             id: string;
@@ -37,7 +41,12 @@ export declare const agentTeamsDomain: {
             requiresPlan: boolean;
             required: boolean;
             createdAt: number;
+            availability?: "ready" | "locked" | undefined;
             ownerSessionId?: string | undefined;
+            assignedMemberId?: string | undefined;
+            assignedRole?: string | undefined;
+            requiredCapabilities?: string[] | undefined;
+            workspaceId?: string | undefined;
             result?: string | undefined;
             startedAt?: number | undefined;
             completedAt?: number | undefined;
@@ -50,8 +59,15 @@ export declare const agentTeamsDomain: {
             body: string;
             createdAt: number;
             toSessionId?: string | undefined;
-            deliveryState?: "failed" | "pending" | "delivered" | undefined;
+            deliveryState?: "failed" | "pending" | "queued" | "delivering" | "delivered" | "acknowledged" | undefined;
             deliveryTransport?: "native-followup" | "native-report" | "durable-inbox" | undefined;
+            deliveryAttempt?: number | undefined;
+            deliveryTargets?: Record<string, {
+                state: "failed" | "pending" | "queued" | "delivering" | "delivered" | "acknowledged";
+                attempts: number;
+                deliveredAt?: number | undefined;
+                error?: string | undefined;
+            }> | undefined;
             deliveredAt?: number | undefined;
             deliveryError?: string | undefined;
         }>;
@@ -98,7 +114,7 @@ export declare const agentTeamsDomain: {
             repositoryRoot: string;
             branch: string;
             worktreePath: string;
-            status: "review" | "requested" | "creating" | "ready" | "dirty" | "clean" | "merged" | "abandoned" | "recoverable";
+            status: "ready" | "review" | "requested" | "creating" | "dirty" | "clean" | "merged" | "abandoned" | "recoverable";
             leaseId: string;
             createdAt: number;
             updatedAt: number;
@@ -114,7 +130,7 @@ export declare const agentTeamsDomain: {
             baseRef: string;
             worktreePath: string;
             changedFiles: string[];
-            status: "creating" | "ready" | "dirty" | "clean" | "merged" | "abandoned" | "recoverable";
+            status: "ready" | "creating" | "dirty" | "clean" | "merged" | "abandoned" | "recoverable";
             createdAt: number;
             updatedAt: number;
             head?: string | undefined;

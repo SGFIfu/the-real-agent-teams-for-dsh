@@ -40,6 +40,8 @@ export declare class AgentTeamsService {
     private readyFlag;
     /** Serializes multi-record invariants within one plugin process. */
     private readonly teamMutationQueues;
+    /** Coalesces duplicate wake-ups while a worker is being nudged. */
+    private readonly wakeKeys;
     constructor(deps: ServiceDeps);
     /** Resolve a team or fail with the typed error. */
     private team;
@@ -85,6 +87,7 @@ export declare class AgentTeamsService {
         name: string;
         role: string;
         provider?: string;
+        modelProvider?: string;
         model?: string;
         capabilities?: string[];
         actor: SessionId;
@@ -101,7 +104,16 @@ export declare class AgentTeamsService {
     private syncMemberTask;
     /** Native lifecycle bridge update; authorization is supplied by the host event source. */
     updateMemberFromRuntime(memberId: string, patch: Partial<Pick<TeamMember, 'status' | 'currentTaskId'>>): Promise<TeamMember>;
+    auditCapability(input: {
+        teamId: string;
+        sessionId: SessionId;
+        capability: string;
+        allowed: boolean;
+        command?: string;
+        workspace?: string;
+    }): Promise<void>;
     removeMember(memberId: string, actor: SessionId): Promise<void>;
+    assignTask(taskId: string, memberId: string, actor: SessionId): Promise<TeamTask>;
     createTask(input: {
         teamId: string;
         title: string;
@@ -110,6 +122,10 @@ export declare class AgentTeamsService {
         dependencies?: string[];
         requiresPlan?: boolean;
         required?: boolean;
+        assignedMemberId?: string;
+        assignedRole?: string;
+        requiredCapabilities?: string[];
+        workspaceId?: string;
         actor: SessionId;
     }): Promise<TeamTask>;
     createTasks(batch: Array<Omit<Parameters<AgentTeamsService['createTask']>[0], 'actor' | 'teamId'> & {
@@ -121,6 +137,10 @@ export declare class AgentTeamsService {
     private tasksOf;
     /** True when every dependency of the task is completed. */
     private dependenciesSatisfied;
+    private memberCanClaim;
+    private requireCapability;
+    private refreshReadyTasks;
+    private wakeEligibleWorkers;
     /** Cycle detection over the task graph of one team (DFS with colors). */
     addDependency(teamId: string, taskId: string, dependencyId: string, actor: SessionId): Promise<TeamTask>;
     claimTask(taskId: string, actor: SessionId): Promise<TeamTask>;
@@ -154,6 +174,9 @@ export declare class AgentTeamsService {
     releaseTask(taskId: string, actor: SessionId, reason?: string): Promise<TeamTask>;
     reassignTask(taskId: string, actor: SessionId, toSessionId: SessionId): Promise<TeamTask>;
     setTaskBlocked(taskId: string, actor: SessionId, reason?: string): Promise<TeamTask>;
+    private deliverMessageTarget;
+    private aggregateDelivery;
+    private tryMessageDelivery;
     sendMessage(input: {
         teamId: string;
         fromSessionId: SessionId;
@@ -161,6 +184,7 @@ export declare class AgentTeamsService {
         type?: TeamMessageType;
         body: string;
     }): Promise<TeamMessage>;
+    retryPendingMessages(teamId: string, targetSessionId?: SessionId): Promise<TeamMessage[]>;
     private leadHandleFor;
     private memberHandleFor;
     broadcastMessage(input: {

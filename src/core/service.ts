@@ -39,6 +39,7 @@ import type {
   WorkspaceActor,
   WorkspaceManager,
 } from './workspace.ts';
+import { capabilityAudit, hasCapabilities, normalizeCapabilities } from './capabilities.ts';
 
 export interface ServiceDeps {
   store: TeamStore;
@@ -76,6 +77,8 @@ export class AgentTeamsService {
   private readyFlag = false;
   /** Serializes multi-record invariants within one plugin process. */
   private readonly teamMutationQueues = new Map<string, Promise<void>>();
+  /** Coalesces duplicate wake-ups while a worker is being nudged. */
+  private readonly wakeKeys = new Set<string>();
 
   constructor(deps: ServiceDeps) {
     this.store = deps.store;
@@ -338,6 +341,7 @@ export class AgentTeamsService {
     name: string;
     role: string;
     provider?: string;
+    modelProvider?: string;
     model?: string;
     capabilities?: string[];
     actor: SessionId;
@@ -366,9 +370,11 @@ export class AgentTeamsService {
       name: input.name,
       role: input.role,
       status: 'starting',
+      lifecycleState: 'starting',
       provider: input.provider,
+      modelProvider: input.modelProvider,
       model: input.model,
-      capabilities: input.capabilities,
+      capabilities: normalizeCapabilities(input.capabilities, input.role),
       joinedAt: timestamp,
       lastActiveAt: timestamp,
     };
@@ -392,6 +398,7 @@ export class AgentTeamsService {
       ...current,
       sessionId: childSessionId,
       status: 'idle',
+      lifecycleState: 'waiting_for_task',
       lastActiveAt: now(),
     }));
     const bound = result.value as TeamMember;
@@ -402,7 +409,7 @@ export class AgentTeamsService {
   async markMemberSpawnFailed(memberId: string, actor: SessionId): Promise<TeamMember> {
     const member = await this.getMember(memberId);
     await this.requireLead(member.teamId, actor);
-    const result = await this.store.update('members', memberId, (current) => ({ ...current, status: 'failed', lastActiveAt: now() }));
+    const result = await this.store.update('members', memberId, (current) => ({ ...current, status: 'failed', lifecycleState: 'failed', lastActiveAt: now() }));
     const failed = result.value as TeamMember;
     this.emit(events.MEMBER_STATUS, { member: failed, spawn: 'failed' });
     return failed;
@@ -430,6 +437,7 @@ export class AgentTeamsService {
     const result = await this.store.update('members', memberId, (m) => ({
       ...m,
       ...patch,
+      lifecycleState: patch.status === 'stopped' ? 'stopped' : patch.status === 'failed' ? 'failed' : m.lifecycleState,
       lastActiveAt: now(),
     }));
     const updated = result.value as TeamMember;
@@ -453,6 +461,7 @@ export class AgentTeamsService {
       ...m,
       currentTaskId: taskId,
       status: status ?? (taskId === undefined ? 'idle' : 'working'),
+      lifecycleState: taskId === undefined ? 'waiting_for_task' : status === 'blocked' ? 'blocked' : 'working',
       lastActiveAt: now(),
     }));
     const updated = result.value as TeamMember;
@@ -467,10 +476,54 @@ export class AgentTeamsService {
     const effectivePatch = patch.status === 'idle' && current.currentTaskId !== undefined && (current.status === 'working' || current.status === 'blocked')
       ? { ...patch, status: current.status }
       : patch;
-    const result = await this.store.update('members', memberId, (m) => ({ ...m, ...effectivePatch, lastActiveAt: now() }));
+    const terminalRuntimeState = effectivePatch.status === 'failed' || effectivePatch.status === 'stopped';
+    const result = await this.store.update('members', memberId, (m) => ({
+      ...m,
+      ...effectivePatch,
+      ...(terminalRuntimeState ? { currentTaskId: undefined } : {}),
+      lifecycleState: effectivePatch.status === 'failed' ? 'failed' : effectivePatch.status === 'stopped' ? 'stopped' : effectivePatch.status === 'working' ? 'working' : effectivePatch.status === 'idle' ? 'waiting_for_task' : m.lifecycleState,
+      lastActiveAt: now(),
+    }));
     const updated = result.value as TeamMember;
     if (updated.status !== current.status || updated.currentTaskId !== current.currentTaskId) this.emit(events.MEMBER_STATUS, { member: updated });
+    if (effectivePatch.status === 'failed' || effectivePatch.status === 'stopped') {
+      const owned = await this.store.list('tasks', (task) => task.teamId === current.teamId && task.ownerSessionId === current.sessionId && (task.status === 'in_progress' || task.status === 'blocked'));
+      for (const task of owned) {
+        const released = await this.store.update('tasks', task.id, (value) => ({
+          ...value,
+          status: 'pending',
+          availability: 'ready',
+          ownerSessionId: undefined,
+          startedAt: undefined,
+          result: (value.result ?? '') + '\n[released: member runtime ' + effectivePatch.status + ']'
+        }));
+        this.emit(events.TASK_RELEASED, { task: released.value, reason: 'member runtime ' + effectivePatch.status });
+      }
+      const ready = await this.refreshReadyTasks(current.teamId);
+      await this.wakeEligibleWorkers(current.teamId, ready);
+    }
     return updated;
+  }
+
+  async auditCapability(input: {
+    teamId: string;
+    sessionId: SessionId;
+    capability: string;
+    allowed: boolean;
+    command?: string;
+    workspace?: string;
+  }): Promise<void> {
+    const member = await this.memberBySession(input.teamId, input.sessionId);
+    if (member === undefined) throw teamError('UNAUTHORIZED_TEAM_ACCESS', 'capability actor is not a team member', { teamId: input.teamId, sessionId: input.sessionId });
+    this.emit(events.CAPABILITY_DECISION, capabilityAudit({
+      teamId: input.teamId,
+      memberId: member.id,
+      sessionId: input.sessionId,
+      capability: input.capability,
+      allowed: input.allowed,
+      command: input.command,
+      workspace: input.workspace,
+    }));
   }
 
   async removeMember(memberId: string, actor: SessionId): Promise<void> {
@@ -491,6 +544,19 @@ export class AgentTeamsService {
     this.emit(events.MEMBER_LEFT, { member: current });
   }
 
+  async assignTask(taskId: string, memberId: string, actor: SessionId): Promise<TeamTask> {
+    const task = await this.requireTask(taskId);
+    const team = await this.requireLead(task.teamId, actor);
+    await this.assertActive(team);
+    const member = await this.getMember(memberId);
+    if (member.teamId !== task.teamId) throw teamError('MEMBER_NOT_FOUND', `member ${memberId} is not in team ${task.teamId}`, { memberId, teamId: task.teamId });
+    if (task.status !== 'pending' || task.ownerSessionId !== undefined) throw teamError('TASK_ALREADY_CLAIMED', `task ${taskId} is not assignable`, { taskId, status: task.status, owner: task.ownerSessionId });
+    const result = await this.store.update('tasks', taskId, (current) => ({ ...current, assignedMemberId: member.id, assignedRole: current.assignedRole ?? member.role }));
+    const assigned = result.value as TeamTask;
+    this.emit(events.TASK_READY, { task: assigned, assignment: 'explicit', memberId: member.id });
+    return assigned;
+  }
+
   // ── tasks ──────────────────────────────────────────────────────────────────
   async createTask(input: {
     teamId: string;
@@ -500,23 +566,41 @@ export class AgentTeamsService {
     dependencies?: string[];
     requiresPlan?: boolean;
     required?: boolean;
+    assignedMemberId?: string;
+    assignedRole?: string;
+    requiredCapabilities?: string[];
+    workspaceId?: string;
     actor: SessionId;
   }): Promise<TeamTask> {
     const { team } = await this.assertActor(input.teamId, input.actor);
     await this.assertActive(team);
     const id = newId('task') as TeamTask['id'];
     const dependencies = (input.dependencies ?? []) as TaskId[];
-    for (const dep of dependencies) await this.requireTask(dep);
+    for (const dep of dependencies) {
+      const dependency = await this.requireTask(dep);
+      if (dependency.teamId !== input.teamId) {
+        throw teamError('INVALID_INPUT', 'task dependencies must belong to the same team', { teamId: input.teamId, dependencyId: dep });
+      }
+    }
+    if (input.assignedMemberId !== undefined) {
+      const assigned = await this.getMember(input.assignedMemberId);
+      if (assigned.teamId !== input.teamId) throw teamError('MEMBER_NOT_FOUND', 'assigned member is not in this team', { memberId: input.assignedMemberId, teamId: input.teamId });
+    }
     const task: TeamTask = {
       id,
       teamId: input.teamId as TeamTask['teamId'],
       title: input.title,
       description: input.description,
       status: 'pending',
+      availability: dependencies.length === 0 ? 'ready' : 'locked',
       priority: input.priority ?? 'normal',
       dependencies,
       requiresPlan: input.requiresPlan ?? false,
       required: input.required ?? true,
+      assignedMemberId: input.assignedMemberId as TeamTask['assignedMemberId'],
+      assignedRole: input.assignedRole,
+      requiredCapabilities: input.requiredCapabilities as TeamTask['requiredCapabilities'],
+      workspaceId: input.workspaceId,
       createdAt: now(),
     };
     await this.store.put('tasks', id, task);
@@ -569,6 +653,85 @@ export class AgentTeamsService {
     return true;
   }
 
+  private async memberCanClaim(teamId: string, actor: SessionId, task: TeamTask): Promise<{ allowed: boolean; reason?: string }> {
+    const team = await this.team(teamId);
+    if (team.leadSessionId === actor) {
+      if (task.assignedMemberId !== undefined || task.assignedRole !== undefined || (task.requiredCapabilities?.length ?? 0) > 0) {
+        return { allowed: false, reason: 'task is assigned to a teammate or requires teammate capabilities' };
+      }
+      return { allowed: true };
+    }
+    const member = await this.memberBySession(teamId, actor);
+    if (member === undefined) return { allowed: false, reason: 'caller is not a teammate' };
+    if (member.status === 'stopped' || member.status === 'failed') return { allowed: false, reason: `member is ${member.status}` };
+    if (member.currentTaskId !== undefined) return { allowed: false, reason: 'member already owns an active task' };
+    if (task.assignedMemberId !== undefined && task.assignedMemberId !== member.id) return { allowed: false, reason: 'task is assigned to another member' };
+    if (task.assignedRole !== undefined && task.assignedRole.toLowerCase() !== member.role.toLowerCase()) return { allowed: false, reason: 'task is assigned to another role' };
+    if (!hasCapabilities(member, task.requiredCapabilities)) return { allowed: false, reason: 'member lacks required capabilities' };
+    return { allowed: true };
+  }
+
+  private async requireCapability(teamId: string, actor: SessionId, capability: string, context?: { command?: string; workspace?: string }): Promise<void> {
+    const team = await this.team(teamId);
+    if (team.leadSessionId === actor) return;
+    const member = await this.memberBySession(teamId, actor);
+    const allowed = member !== undefined && (member.capabilities ?? []).includes(capability);
+    if (member !== undefined) this.emit(events.CAPABILITY_DECISION, capabilityAudit({ teamId, memberId: member.id, sessionId: actor, capability, allowed, command: context?.command, workspace: context?.workspace }));
+    if (!allowed) throw teamError('CAPABILITY_DENIED', 'member lacks capability ' + capability, { teamId, actor, capability });
+  }
+
+  private async refreshReadyTasks(teamId: string): Promise<TeamTask[]> {
+    const all = this.tasksOf(teamId, await this.store.list('tasks'));
+    const ready: TeamTask[] = [];
+    for (const task of all.values()) {
+      if (task.status !== 'pending' || task.ownerSessionId !== undefined) continue;
+      const nextAvailability = this.dependenciesSatisfied(task, all) ? 'ready' : 'locked';
+      if (task.availability === nextAvailability) {
+        if (nextAvailability === 'ready') ready.push(task);
+        continue;
+      }
+      const result = await this.store.update('tasks', task.id, (current) => current.status === 'pending' && current.ownerSessionId === undefined
+        ? { ...current, availability: nextAvailability }
+        : current);
+      const updated = result.value as TeamTask;
+      if (nextAvailability === 'ready') {
+        ready.push(updated);
+        this.emit(events.TASK_READY, { task: updated });
+      }
+    }
+    return ready;
+  }
+
+  private async wakeEligibleWorkers(teamId: string, readyTasks: TeamTask[]): Promise<void> {
+    if (this.runtime === undefined || readyTasks.length === 0) return;
+    const team = await this.team(teamId);
+    const members = await this.store.list('members', (member) => member.teamId === teamId && member.status !== 'failed' && member.status !== 'stopped' && member.currentTaskId === undefined);
+    for (const task of readyTasks) {
+      const targets = members.filter((member) =>
+        (task.assignedMemberId === undefined || task.assignedMemberId === member.id) &&
+        (task.assignedRole === undefined || task.assignedRole.toLowerCase() === member.role.toLowerCase()) &&
+        hasCapabilities(member, task.requiredCapabilities),
+      );
+      for (const member of targets) {
+        const key = `${task.id}:${member.sessionId}`;
+        if (this.wakeKeys.has(key)) continue;
+        this.wakeKeys.add(key);
+        const text = `Authoritative team update: task ${task.id} (${task.title}) is READY. Sync team_snapshot, check your inbox, then claimNextTask if eligible. Do not claim tasks assigned to another member or role.`;
+        this.emit(events.WORKER_WAKEUP_REQUESTED, { teamId, taskId: task.id, sessionId: member.sessionId });
+        try {
+          if (this.runtime.wakeWorker !== undefined) {
+            await this.runtime.wakeWorker(this.leadHandleFor(team), member.sessionId, text, team.leadSessionId);
+          } else {
+            await this.runtime.followup(this.leadHandleFor(team), member.sessionId, text, team.leadSessionId);
+          }
+        } catch (error) {
+          this.wakeKeys.delete(key);
+          this.emit(events.WORKER_WAKEUP_FAILED, { teamId, taskId: task.id, sessionId: member.sessionId, error: String(error) });
+        }
+      }
+    }
+  }
+
   /** Cycle detection over the task graph of one team (DFS with colors). */
   async addDependency(teamId: string, taskId: string, dependencyId: string, actor: SessionId): Promise<TeamTask> {
     await this.assertActor(teamId, actor);
@@ -598,6 +761,7 @@ export class AgentTeamsService {
     const result = await this.store.update('tasks', taskId, (current) => ({
       ...current,
       dependencies: [...current.dependencies, dependencyId as TaskId],
+      availability: 'locked',
     }));
     return result.value as TeamTask;
   }
@@ -607,13 +771,26 @@ export class AgentTeamsService {
     const { team } = await this.assertActor(task.teamId, actor);
     await this.assertActive(team);
     const all = this.tasksOf(task.teamId, await this.store.list('tasks'));
+    if (task.status === 'pending' && !this.dependenciesSatisfied(task, all)) {
+      throw teamError('TASK_DEPENDENCIES_UNRESOLVED', `task ${taskId} has unresolved dependencies`, {
+        taskId,
+        dependencies: task.dependencies.filter((d) => all.get(d)?.status !== 'completed'),
+      });
+    }
+    if (task.status === 'pending') {
+      const eligibility = await this.memberCanClaim(task.teamId, actor, task);
+      if (!eligibility.allowed) {
+        throw teamError('TASK_NOT_ELIGIBLE', `session ${actor} is not eligible for task ${taskId}: ${eligibility.reason ?? 'eligibility policy rejected'}`, { taskId, actor, reason: eligibility.reason });
+      }
+    }
     const result = await this.store.update('tasks', taskId, (current) => {
       if (current.status !== 'pending') return null;
       if (!this.dependenciesSatisfied(current, all)) return null;
-      return { ...current, status: 'in_progress', ownerSessionId: actor, startedAt: now() };
+      return { ...current, status: 'in_progress', availability: 'ready', ownerSessionId: actor, startedAt: now() };
     });
     if (result.found && (result.value as TeamTask).ownerSessionId === actor && (result.value as TeamTask).status === 'in_progress') {
       const claimed = result.value as TeamTask;
+      this.wakeKeys.delete(`${claimed.id}:${actor}`);
       await this.syncMemberTask(claimed.teamId, actor, claimed.id);
       this.emit(events.TASK_CLAIMED, { task: claimed, ownerSessionId: actor });
       return claimed;
@@ -640,20 +817,30 @@ export class AgentTeamsService {
   async claimNextTask(teamId: string, actor: SessionId): Promise<{ claimed: false; reason: string } | { claimed: true; task: TeamTask }> {
     const { team } = await this.assertActor(teamId, actor);
     await this.assertActive(team);
+    const actorMember = team.leadSessionId === actor ? undefined : await this.memberBySession(teamId, actor);
+    if (actorMember?.status === 'stopped' || actorMember?.status === 'failed') {
+      throw teamError('TASK_NOT_ELIGIBLE', `member ${actor} is ${actorMember.status}`, { teamId, actor });
+    }
     const all = this.tasksOf(teamId, await this.store.list('tasks'));
     const candidates = [...all.values()]
       .filter((t) => t.status === 'pending')
       .filter((t) => t.ownerSessionId === undefined)
       .filter((t) => this.dependenciesSatisfied(t, all))
+      .filter((t) => t.availability !== 'locked')
+      .filter((t) => actorMember?.currentTaskId === undefined || (t.assignedMemberId === undefined && t.assignedRole === undefined && (t.requiredCapabilities?.length ?? 0) === 0))
+      .filter((t) => t.assignedMemberId === undefined || actorMember?.id === t.assignedMemberId)
+      .filter((t) => t.assignedRole === undefined || actorMember?.role.toLowerCase() === t.assignedRole.toLowerCase())
+      .filter((t) => actorMember === undefined || hasCapabilities(actorMember, t.requiredCapabilities))
       .sort((a, b) => PRIORITY_RANK[a.priority] - PRIORITY_RANK[b.priority] || a.createdAt - b.createdAt);
     for (const candidate of candidates) {
       const result = await this.store.update('tasks', candidate.id, (current) => {
         if (current.status !== 'pending' || current.ownerSessionId !== undefined) return null;
         if (!this.dependenciesSatisfied(current, all)) return null;
-        return { ...current, status: 'in_progress', ownerSessionId: actor, startedAt: now() };
+        return { ...current, status: 'in_progress', availability: 'ready', ownerSessionId: actor, startedAt: now() };
       });
       const value = result.value as TeamTask | undefined;
       if (value !== undefined && value.ownerSessionId === actor && value.status === 'in_progress') {
+        this.wakeKeys.delete(`${value.id}:${actor}`);
         await this.syncMemberTask(teamId, actor, value.id);
         this.emit(events.TASK_CLAIMED, { task: value, ownerSessionId: actor });
         return { claimed: true, task: value };
@@ -663,9 +850,13 @@ export class AgentTeamsService {
     const blockedByDeps = [...all.values()].some(
       (t) => t.status === 'pending' && t.ownerSessionId === undefined && !this.dependenciesSatisfied(t, all),
     );
+    const assignedElsewhere = [...all.values()].some((t) => t.status === 'pending' && t.ownerSessionId === undefined && this.dependenciesSatisfied(t, all) && (
+      (t.assignedMemberId !== undefined && t.assignedMemberId !== actorMember?.id) ||
+      (t.assignedRole !== undefined && t.assignedRole.toLowerCase() !== actorMember?.role.toLowerCase())
+    ));
     return {
       claimed: false,
-      reason: blockedByDeps ? 'no claimable task: remaining candidates have unresolved dependencies' : 'no claimable task',
+      reason: blockedByDeps ? 'no claimable task: remaining candidates have unresolved dependencies' : assignedElsewhere ? 'no eligible task: remaining ready tasks are assigned to another member or role' : 'no claimable task',
     };
   }
 
@@ -716,6 +907,8 @@ export class AgentTeamsService {
     }
     await this.syncMemberTask(task.teamId, actor, undefined);
     this.emit(status === 'completed' ? events.TASK_COMPLETED : events.TASK_FAILED, { task: value });
+    const ready = await this.refreshReadyTasks(task.teamId);
+    await this.wakeEligibleWorkers(task.teamId, ready);
     return value;
   }
 
@@ -731,6 +924,7 @@ export class AgentTeamsService {
       return {
         ...current,
         status: 'pending',
+        availability: 'ready',
         ownerSessionId: undefined,
         startedAt: undefined,
         result: reason !== undefined ? `${current.result ?? ''}\n[released: ${reason}]`.trim() : current.result,
@@ -742,6 +936,8 @@ export class AgentTeamsService {
     }
     if (task.ownerSessionId !== undefined) await this.syncMemberTask(task.teamId, task.ownerSessionId, undefined);
     this.emit(events.TASK_RELEASED, { task: value, reason });
+    const ready = await this.refreshReadyTasks(task.teamId);
+    await this.wakeEligibleWorkers(task.teamId, ready);
     return value;
   }
 
@@ -757,6 +953,14 @@ export class AgentTeamsService {
     const target = await this.memberBySession(task.teamId, toSessionId);
     if (target === undefined) {
       throw teamError('MEMBER_NOT_FOUND', `reassign target ${toSessionId} is not a member`, { toSessionId });
+    }
+    const eligibility = await this.memberCanClaim(task.teamId, toSessionId, task);
+    if (!eligibility.allowed) {
+      throw teamError('TASK_NOT_ELIGIBLE', `session ${toSessionId} is not eligible for task ${taskId}: ${eligibility.reason ?? 'eligibility policy rejected'}`, { taskId, toSessionId, reason: eligibility.reason });
+    }
+    const all = this.tasksOf(task.teamId, await this.store.list('tasks'));
+    if (!this.dependenciesSatisfied(task, all)) {
+      throw teamError('TASK_DEPENDENCIES_UNRESOLVED', `task ${taskId} has unresolved dependencies`, { taskId, dependencies: task.dependencies.filter((d) => all.get(d)?.status !== 'completed') });
     }
     const previousOwner = task.ownerSessionId;
     const result = await this.store.update('tasks', taskId, (current) => ({
@@ -788,6 +992,73 @@ export class AgentTeamsService {
   }
 
   // ── messages ───────────────────────────────────────────────────────────────
+  private async deliverMessageTarget(message: TeamMessage, team: AgentTeam, target: string, senderMember?: TeamMember): Promise<TeamMessage['deliveryTransport']> {
+    if (this.runtime === undefined) throw new Error('native subagent runtime is not mounted');
+    if (target === team.leadSessionId && senderMember !== undefined) {
+      await this.runtime.reportFrom(this.memberHandleFor(senderMember.sessionId), message.body);
+      return 'native-report';
+    }
+    if (target !== team.leadSessionId) {
+      await this.runtime.followup(this.leadHandleFor(team), target, message.body, message.fromSessionId);
+      return 'native-followup';
+    }
+    return 'durable-inbox';
+  }
+
+  private aggregateDelivery(message: TeamMessage, errors: string[]): TeamMessage {
+    const targets = Object.values(message.deliveryTargets ?? {});
+    const delivered = targets.length === 0 || targets.every((target) => target.state === 'delivered' || target.state === 'acknowledged');
+    const queued = targets.some((target) => target.state === 'queued' || target.state === 'pending' || target.state === 'delivering');
+    const failed = targets.length > 0 && targets.every((target) => target.state === 'failed');
+    return {
+      ...message,
+      deliveryState: delivered ? 'delivered' : queued ? 'queued' : failed ? 'failed' : 'pending',
+      ...(delivered ? { deliveredAt: message.deliveredAt ?? now(), deliveryError: undefined } : {}),
+      ...(errors.length > 0 ? { deliveryError: errors.join('; ') } : {}),
+    };
+  }
+
+  private async tryMessageDelivery(messageId: string, team: AgentTeam, retry = false): Promise<TeamMessage> {
+    const current = await this.store.get('messages', messageId);
+    if (current === undefined) throw teamError('MESSAGE_NOT_FOUND', 'message not found', { messageId });
+    const targets = current.deliveryTargets ?? {};
+    const senderMember = await this.memberBySession(team.id, current.fromSessionId);
+    const errors: string[] = [];
+    let transport: TeamMessage['deliveryTransport'] = current.deliveryTransport;
+    for (const target of Object.keys(targets)) {
+      const state = targets[target];
+      if (state === undefined || state.state === 'delivered' || state.state === 'acknowledged') continue;
+      const attempts = state.attempts + 1;
+      if (attempts > 5) {
+        targets[target] = { ...state, state: 'failed', attempts, error: state.error ?? 'delivery retry limit exceeded' };
+        errors.push(target + ': delivery retry limit exceeded');
+        continue;
+      }
+      targets[target] = { ...state, state: 'delivering', attempts };
+      try {
+        transport = await this.deliverMessageTarget(current, team, target, senderMember);
+        targets[target] = { state: 'delivered', attempts, deliveredAt: now() };
+        this.emit(events.MESSAGE_DELIVERED, { teamId: team.id, messageId, targetSessionId: target, attempt: attempts, retry });
+      } catch (error) {
+        const messageError = String(error);
+        targets[target] = { state: 'queued', attempts, error: messageError };
+        errors.push(target + ': ' + messageError);
+        this.emit(events.MESSAGE_QUEUED, { teamId: team.id, messageId, targetSessionId: target, attempt: attempts, error: messageError });
+      }
+    }
+    const attemptValues = Object.values(targets).map((value) => value.attempts);
+    const updated = this.aggregateDelivery({
+      ...current,
+      deliveryTargets: targets,
+      deliveryAttempt: Math.max(current.deliveryAttempt ?? 0, ...attemptValues),
+      deliveryTransport: transport,
+    }, errors);
+    const result = await this.store.update('messages', messageId, () => updated);
+    const finalMessage = result.value as TeamMessage;
+    if (finalMessage.deliveryState === 'failed') this.emit(events.MESSAGE_DELIVERY_FAILED, { message: finalMessage, error: finalMessage.deliveryError });
+    return finalMessage;
+  }
+
   async sendMessage(input: {
     teamId: string;
     fromSessionId: SessionId;
@@ -805,6 +1076,11 @@ export class AgentTeamsService {
         throw teamError('MEMBER_NOT_FOUND', `message target ${input.toSessionId} is not in team ${input.teamId}`, { toSessionId: input.toSessionId });
       }
     }
+    const targets = input.toSessionId === undefined
+      ? (await this.store.list('members', (m) => m.teamId === input.teamId)).map((m) => m.sessionId)
+      : [input.toSessionId];
+    const deliveryTargets: NonNullable<TeamMessage['deliveryTargets']> = {};
+    for (const target of targets) deliveryTargets[target] = { state: 'pending', attempts: 0 };
     const id = newId('msg') as TeamMessage['id'];
     const message: TeamMessage = {
       id,
@@ -815,11 +1091,9 @@ export class AgentTeamsService {
       body: input.body,
       createdAt: now(),
       deliveryState: 'pending',
+      deliveryTargets,
     };
     await this.store.put('messages', id, message);
-    const targets = input.toSessionId === undefined
-      ? (await this.store.list('members', (m) => m.teamId === input.teamId)).map((m) => m.sessionId)
-      : [input.toSessionId];
     const deliveryErrors: string[] = this.runtime === undefined ? ['native subagent runtime is not mounted'] : [];
     let transport: TeamMessage['deliveryTransport'] = 'durable-inbox';
     if (this.runtime !== undefined) {
@@ -828,6 +1102,7 @@ export class AgentTeamsService {
           if (target === team.leadSessionId && senderMember !== undefined) {
             await this.runtime.reportFrom(this.memberHandleFor(senderMember.sessionId), input.body);
             transport = 'native-report';
+            deliveryTargets[target] = { state: 'delivered', attempts: 1, deliveredAt: now() };
           } else if (target !== team.leadSessionId) {
             // Native Harness authorizes followup by the direct parent. The
             // coordinator relays through that authority while retaining the
@@ -835,22 +1110,40 @@ export class AgentTeamsService {
             // or rewrites the message.
             await this.runtime.followup(this.leadHandleFor(team), target, input.body, input.fromSessionId);
             transport = 'native-followup';
+            deliveryTargets[target] = { state: 'delivered', attempts: 1, deliveredAt: now() };
           }
         } catch (error) {
-          deliveryErrors.push(`${target}: ${String(error)}`);
+          const messageError = `${target}: ${String(error)}`;
+          deliveryErrors.push(messageError);
+          deliveryTargets[target] = { state: 'queued', attempts: 1, error: messageError };
         }
       }
     }
     const delivered = deliveryErrors.length === 0;
     const finalMessage = (await this.store.update('messages', id, (current) => ({
       ...current,
-      deliveryState: delivered ? 'delivered' : 'failed',
+      deliveryState: delivered ? 'delivered' : this.runtime === undefined ? 'failed' : 'queued',
       deliveryTransport: transport,
       ...(delivered ? { deliveredAt: now() } : { deliveryError: deliveryErrors.join('; ') }),
     }))).value as TeamMessage;
     this.emit(events.MESSAGE_SENT, { message: finalMessage });
-    if (!delivered) this.emit(events.MESSAGE_DELIVERY_FAILED, { message: finalMessage, error: deliveryErrors.join('; ') });
+    if (!delivered) {
+      if (this.runtime === undefined) this.emit(events.MESSAGE_DELIVERY_FAILED, { message: finalMessage, error: deliveryErrors.join('; ') });
+      else this.emit(events.MESSAGE_QUEUED, { message: finalMessage, error: deliveryErrors.join('; ') });
+    }
     return finalMessage;
+  }
+
+  async retryPendingMessages(teamId: string, targetSessionId?: SessionId): Promise<TeamMessage[]> {
+    if (this.runtime === undefined) return [];
+    const team = await this.team(teamId);
+    const pending = await this.store.list('messages', (message) => message.teamId === teamId && (message.deliveryState === 'queued' || message.deliveryState === 'pending'));
+    const retried: TeamMessage[] = [];
+    for (const message of pending) {
+      if (targetSessionId !== undefined && message.toSessionId !== undefined && message.toSessionId !== targetSessionId) continue;
+      retried.push(await this.tryMessageDelivery(message.id, team, true));
+    }
+    return retried;
   }
 
   private leadHandleFor(team: AgentTeam): unknown {
@@ -947,6 +1240,8 @@ export class AgentTeamsService {
       await this.syncMemberTask(plan.teamId, taskBefore.ownerSessionId, undefined, 'idle');
     }
     this.emit(events.PLAN_APPROVED, { plan: approved });
+    const ready = await this.refreshReadyTasks(plan.teamId);
+    await this.wakeEligibleWorkers(plan.teamId, ready);
     return approved;
   }
 
@@ -974,6 +1269,8 @@ export class AgentTeamsService {
       await this.syncMemberTask(plan.teamId, taskBefore.ownerSessionId, undefined, 'idle');
     }
     this.emit(events.PLAN_REJECTED, { plan: rejected });
+    const ready = await this.refreshReadyTasks(plan.teamId);
+    await this.wakeEligibleWorkers(plan.teamId, ready);
     return rejected;
   }
 
@@ -1076,6 +1373,7 @@ export class AgentTeamsService {
   }): Promise<FileClaim[]> {
     const { team } = await this.assertActor(input.teamId, input.ownerSessionId);
     await this.assertActive(team);
+    await this.requireCapability(input.teamId, input.ownerSessionId, 'repo.write.owned', { command: 'team_file_claim', workspace: input.workspaceId });
     await this.assertImplementationReady(input.teamId, input.ownerSessionId);
     if (this.workspace !== undefined) {
       try {

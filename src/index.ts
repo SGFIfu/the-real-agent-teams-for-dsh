@@ -39,6 +39,7 @@ export const name = 'agent-teams';
 
 export interface Config {
   defaultProvider: string;
+  defaultModel?: string;
   maxActiveMembers: number;
   /** 'auto' opens the harness storage domain when mounted; 'memory' forces the in-memory store. */
   storageMode: 'auto' | 'memory';
@@ -46,6 +47,7 @@ export interface Config {
 
 export const Config: s<Config> = s.object({
   defaultProvider: s.string().default('spawn'),
+  defaultModel: s.string().default('deepseek-v4-flash'),
   maxActiveMembers: s.number().default(5),
   storageMode: s.union(['auto', 'memory']).default('auto'),
 });
@@ -128,7 +130,7 @@ export function apply(ctx: Context, config: Config): void {
     // Runtime: native subagent runtime when mounted; the service still works
     // for coordination when absent, and spawn fails loudly.
     const subagents = ctx.get('subagents') as SubagentRuntime | undefined;
-    const runtime = subagents === undefined ? undefined : new HarnessRuntimeAdapter({ ctx, subagents, defaultProvider: config.defaultProvider });
+    const runtime = subagents === undefined ? undefined : new HarnessRuntimeAdapter({ ctx, subagents, defaultProvider: config.defaultProvider, defaultModel: config.defaultModel });
 
     const service = new AgentTeamsService({
       store,

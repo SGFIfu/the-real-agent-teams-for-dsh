@@ -37,10 +37,26 @@ export declare const memberSchema: z.ZodObject<{
         starting: "starting";
         stopped: "stopped";
     }>;
+    lifecycleState: z.ZodOptional<z.ZodEnum<{
+        working: "working";
+        blocked: "blocked";
+        failed: "failed";
+        starting: "starting";
+        stopped: "stopped";
+        ready: "ready";
+        waiting_for_task: "waiting_for_task";
+        claiming: "claiming";
+        reporting: "reporting";
+        waiting_for_review: "waiting_for_review";
+        cancelled: "cancelled";
+    }>>;
     currentTaskId: z.ZodOptional<z.ZodString>;
     provider: z.ZodOptional<z.ZodString>;
+    modelProvider: z.ZodOptional<z.ZodString>;
     model: z.ZodOptional<z.ZodString>;
     capabilities: z.ZodOptional<z.ZodArray<z.ZodString>>;
+    workspaceId: z.ZodOptional<z.ZodString>;
+    eventCursor: z.ZodOptional<z.ZodNumber>;
     joinedAt: z.ZodNumber;
     lastActiveAt: z.ZodNumber;
 }, z.core.$strip>;
@@ -63,7 +79,15 @@ export declare const taskSchema: z.ZodObject<{
         normal: "normal";
         low: "low";
     }>;
+    availability: z.ZodOptional<z.ZodEnum<{
+        ready: "ready";
+        locked: "locked";
+    }>>;
     ownerSessionId: z.ZodOptional<z.ZodString>;
+    assignedMemberId: z.ZodOptional<z.ZodString>;
+    assignedRole: z.ZodOptional<z.ZodString>;
+    requiredCapabilities: z.ZodOptional<z.ZodArray<z.ZodString>>;
+    workspaceId: z.ZodOptional<z.ZodString>;
     dependencies: z.ZodArray<z.ZodString>;
     requiresPlan: z.ZodBoolean;
     required: z.ZodBoolean;
@@ -92,13 +116,30 @@ export declare const messageSchema: z.ZodObject<{
     deliveryState: z.ZodOptional<z.ZodEnum<{
         failed: "failed";
         pending: "pending";
+        queued: "queued";
+        delivering: "delivering";
         delivered: "delivered";
+        acknowledged: "acknowledged";
     }>>;
     deliveryTransport: z.ZodOptional<z.ZodEnum<{
         "native-followup": "native-followup";
         "native-report": "native-report";
         "durable-inbox": "durable-inbox";
     }>>;
+    deliveryAttempt: z.ZodOptional<z.ZodNumber>;
+    deliveryTargets: z.ZodOptional<z.ZodRecord<z.ZodString, z.ZodObject<{
+        state: z.ZodEnum<{
+            failed: "failed";
+            pending: "pending";
+            queued: "queued";
+            delivering: "delivering";
+            delivered: "delivered";
+            acknowledged: "acknowledged";
+        }>;
+        attempts: z.ZodNumber;
+        deliveredAt: z.ZodOptional<z.ZodNumber>;
+        error: z.ZodOptional<z.ZodString>;
+    }, z.core.$strip>>>;
     deliveredAt: z.ZodOptional<z.ZodNumber>;
     deliveryError: z.ZodOptional<z.ZodString>;
 }, z.core.$strip>;
@@ -165,10 +206,10 @@ export declare const workspaceSchema: z.ZodObject<{
     branch: z.ZodString;
     worktreePath: z.ZodString;
     status: z.ZodEnum<{
+        ready: "ready";
         review: "review";
         requested: "requested";
         creating: "creating";
-        ready: "ready";
         dirty: "dirty";
         clean: "clean";
         merged: "merged";
@@ -190,8 +231,8 @@ export declare const gitWorkspaceSchema: z.ZodObject<{
     head: z.ZodOptional<z.ZodString>;
     changedFiles: z.ZodArray<z.ZodString>;
     status: z.ZodEnum<{
-        creating: "creating";
         ready: "ready";
+        creating: "creating";
         dirty: "dirty";
         clean: "clean";
         merged: "merged";
@@ -303,10 +344,26 @@ export declare const domainSchema: {
             starting: "starting";
             stopped: "stopped";
         }>;
+        lifecycleState: z.ZodOptional<z.ZodEnum<{
+            working: "working";
+            blocked: "blocked";
+            failed: "failed";
+            starting: "starting";
+            stopped: "stopped";
+            ready: "ready";
+            waiting_for_task: "waiting_for_task";
+            claiming: "claiming";
+            reporting: "reporting";
+            waiting_for_review: "waiting_for_review";
+            cancelled: "cancelled";
+        }>>;
         currentTaskId: z.ZodOptional<z.ZodString>;
         provider: z.ZodOptional<z.ZodString>;
+        modelProvider: z.ZodOptional<z.ZodString>;
         model: z.ZodOptional<z.ZodString>;
         capabilities: z.ZodOptional<z.ZodArray<z.ZodString>>;
+        workspaceId: z.ZodOptional<z.ZodString>;
+        eventCursor: z.ZodOptional<z.ZodNumber>;
         joinedAt: z.ZodNumber;
         lastActiveAt: z.ZodNumber;
     }, z.core.$strip>;
@@ -329,7 +386,15 @@ export declare const domainSchema: {
             normal: "normal";
             low: "low";
         }>;
+        availability: z.ZodOptional<z.ZodEnum<{
+            ready: "ready";
+            locked: "locked";
+        }>>;
         ownerSessionId: z.ZodOptional<z.ZodString>;
+        assignedMemberId: z.ZodOptional<z.ZodString>;
+        assignedRole: z.ZodOptional<z.ZodString>;
+        requiredCapabilities: z.ZodOptional<z.ZodArray<z.ZodString>>;
+        workspaceId: z.ZodOptional<z.ZodString>;
         dependencies: z.ZodArray<z.ZodString>;
         requiresPlan: z.ZodBoolean;
         required: z.ZodBoolean;
@@ -358,13 +423,30 @@ export declare const domainSchema: {
         deliveryState: z.ZodOptional<z.ZodEnum<{
             failed: "failed";
             pending: "pending";
+            queued: "queued";
+            delivering: "delivering";
             delivered: "delivered";
+            acknowledged: "acknowledged";
         }>>;
         deliveryTransport: z.ZodOptional<z.ZodEnum<{
             "native-followup": "native-followup";
             "native-report": "native-report";
             "durable-inbox": "durable-inbox";
         }>>;
+        deliveryAttempt: z.ZodOptional<z.ZodNumber>;
+        deliveryTargets: z.ZodOptional<z.ZodRecord<z.ZodString, z.ZodObject<{
+            state: z.ZodEnum<{
+                failed: "failed";
+                pending: "pending";
+                queued: "queued";
+                delivering: "delivering";
+                delivered: "delivered";
+                acknowledged: "acknowledged";
+            }>;
+            attempts: z.ZodNumber;
+            deliveredAt: z.ZodOptional<z.ZodNumber>;
+            error: z.ZodOptional<z.ZodString>;
+        }, z.core.$strip>>>;
         deliveredAt: z.ZodOptional<z.ZodNumber>;
         deliveryError: z.ZodOptional<z.ZodString>;
     }, z.core.$strip>;
@@ -431,10 +513,10 @@ export declare const domainSchema: {
         branch: z.ZodString;
         worktreePath: z.ZodString;
         status: z.ZodEnum<{
+            ready: "ready";
             review: "review";
             requested: "requested";
             creating: "creating";
-            ready: "ready";
             dirty: "dirty";
             clean: "clean";
             merged: "merged";
@@ -456,8 +538,8 @@ export declare const domainSchema: {
         head: z.ZodOptional<z.ZodString>;
         changedFiles: z.ZodArray<z.ZodString>;
         status: z.ZodEnum<{
-            creating: "creating";
             ready: "ready";
+            creating: "creating";
             dirty: "dirty";
             clean: "clean";
             merged: "merged";
