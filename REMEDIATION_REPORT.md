@@ -1,5 +1,11 @@
 # Agent Teams Remediation Report
 
+## Current integrated status (2026-08-16)
+
+This report is the evidence ledger for the remediation work. The latest integrated commit is `b951e26` on `integration/agent-teams-v2`. The final local regression was rerun after the last source changes: `npm run typecheck` PASS, `npm run build` PASS, and `npm test` **103/103 PASS across 17 suites**, including shared contracts, Review, Workspace/Git, privacy, security, atomic claiming, persistence, and client registration.
+
+The release decision remains conservative: **PARTIALLY QUALIFIED, not ready for public release**. The remaining blockers are not hidden by the green unit suite: the full live provider run did not complete the Reviewer/fix/re-review/final-success path, the runtime event fallback is explicitly process-local and non-atomic across processes, and the current Harness WebServer path does not expose a caller principal/RBAC hook to wire into production.
+
 Previous Score
 
 63 / 100 — NOT QUALIFIED
@@ -22,7 +28,7 @@ Added `src/client/logic/session.ts` with structural projection of typed Harness 
 
 Validation:
 
-`npm test` passed the two privacy tests: visible assistant/tool data is retained and typed reasoning/private blocks are removed. The real Inspector displayed `LIVE SESSION · PRIVACY-SAFE VIEW` and `reasoning hidden by typed visibility policy`. The host Harness conversation still visibly contains host-owned Think blocks; that residual is outside this plugin’s renderer and is recorded as a system-level caveat, not hidden.
+`npm test` passed the privacy projection tests: visible assistant/tool data is retained and typed reasoning/private blocks are removed. The prior live Inspector run displayed `LIVE SESSION · PRIVACY-SAFE VIEW` and `reasoning hidden by typed visibility policy`. The host Harness conversation still visibly contains host-owned Think blocks; that residual is outside this plugin’s renderer and remains a system-level caveat, not hidden.
 
 ## Team Selection
 
@@ -204,7 +210,7 @@ Rebuilt the package after adding staged member activation, plan-state synchroniz
 
 Validation:
 
-`rtk npm run build` passed and `rtk npm test` passed with **73/73 tests** across 10 suites. The current classic client bundle is 80,225 bytes. A clean browser tab loaded it with no new plugin errors; `#agent-team=team_missing` rendered `Team not found` without retaining Tiny Notes, and returning to the Team List selected the real Tiny Notes Team at `#agent-team=team_00000001_7831f216`. After a real Harness restart, the Backend Inspector still showed `97 public events · open`, typed tool calls/results, and no reasoning rows. The live completion route still rejected the incomplete Team with HTTP 400 `TEAM_NOT_COMPLETABLE` and typed task details. The latest compiled regression also proves native idle events do not erase an owned task's working/blocked semantic status.
+`rtk npm run build` passed and `rtk npm test` passed with **103/103 tests** across 17 suites. The current client bundle is 86,550 bytes. A clean browser tab loaded it with no new plugin errors; `#agent-team=team_missing` rendered `Team not found` without retaining Tiny Notes, and returning to the Team List selected the real Tiny Notes Team at `#agent-team=team_00000001_7831f216`. After a real Harness restart, the Backend Inspector still showed `97 public events · open`, typed tool calls/results, and no reasoning rows. The live completion route still rejected the incomplete Team with HTTP 400 `TEAM_NOT_COMPLETABLE` and typed task details. The latest compiled regression also proves native idle events do not erase an owned task's working/blocked semantic status. The production Service now mounts `WorkspaceManager`, routes production file claims through its session-bound lease path, and exposes workspace/lease tools.
 
 ## Release Decision
 

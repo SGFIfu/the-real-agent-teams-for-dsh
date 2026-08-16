@@ -6,7 +6,7 @@ Scope: read-only final verification of the current `dsh-agent-teams` fork. No so
 
 ## Executive conclusion
 
-Automated verification is green on the tested commit: typecheck passed, build passed, `npm test` passed all 99 tests in 16 suites, and the client bundle registration test passed. The local Harness web process and the plugin asset endpoint also responded successfully.
+Automated verification is green on the tested commit: typecheck passed, build passed, `npm test` passed all 99 tests in 16 suites, and the client bundle registration test passed. A later integration rerun on `b951e26` passed 103 tests in 17 suites after adding the shared contract suite and mounting production Workspace/Git ownership. The local Harness web process and the plugin asset endpoint also responded successfully.
 
 This is not sufficient evidence for a full release qualification. No real Agent Team was created or mutated, no model-backed teammate sessions were exercised, and no browser interaction or browser-console inspection was performed. The result is therefore **AUTOMATED GREEN / RELEASE READINESS NOT ESTABLISHED** rather than a Qualified release.
 
@@ -15,6 +15,7 @@ This is not sufficient evidence for a full release qualification. No real Agent 
 - Repository: `C:\知识库\dsh-agent-teams`
 - Branch under test: `integration/agent-teams-v2`
 - Code commit under test: `293f961` (`test: execute review and workspace regression suites`)
+- Current integration commit: `b951e26` (`workspace-service-integration`)
 - Package: `dsh-agent-teams@0.1.0`
 - Node: `v24.16.0`
 - npm: `11.13.0`
@@ -128,7 +129,6 @@ There is no `lint` script in `package.json`, so lint qualification was not possi
 
 ## Release readiness
 
-**Conservative result: NOT READY FOR RELEASE QUALIFICATION.**
+**Conservative result: NOT READY FOR RELEASE QUALIFICATION.** The later 103/103 regression does not change this because this QA pass did not perform a funded live Agent Team or browser acceptance run.
 
 The implementation is automated-test green and the live plugin entry is reachable and correctly shaped. A release claim still requires a separate authorized run of the real Agent Team and browser acceptance protocol; this report intentionally does not convert static/service-level evidence into a live PASS.
-

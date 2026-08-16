@@ -8,6 +8,7 @@
 | Harness git commit | Not available; profile and plugin directory are not Git repositories |
 | Agent Teams version | `0.1.0` |
 | Plugin path | `C:\知识库\dsh-agent-teams` |
+| Current source commit | `b951e26 workspace-service-integration` |
 | Node | `v24.16.0` |
 | pnpm | `11.19.0` |
 | OS | Windows 11 Home Chinese, NT `10.0.26200.0` |
@@ -20,8 +21,8 @@
 |---|---|---|
 | Install | PASS | `pnpm install --no-frozen-lockfile` completed and generated `pnpm-lock.yaml`; the initial frozen attempt correctly failed because no lockfile existed yet |
 | Typecheck | PASS | `rtk npm run typecheck`; `tsc -p tsconfig.json --noEmit`, exit 0 |
-| Build | PASS | `rtk npm run build`; generated `lib/client.js` (80,225 bytes) |
-| Tests | PASS | `rtk npm test`; 73 passed, 0 failed, 10 suites |
+| Build | PASS | `rtk npm run build`; generated `lib/client.js` (86,550 bytes) |
+| Tests | PASS | `rtk npm test`; 103 passed, 0 failed, 17 suites |
 | Client bundle | PASS | `rtk node tests/client-module-bundle.mjs`; `client module bundle OK` |
 | Lint | NOT PRESENT | `package.json` has no lint script |
 
@@ -40,6 +41,7 @@
 | Self Claim | PASS for mechanism / PARTIAL live closure | Architect and Tester real self-claim transitions observed; provider stopped before a full completed second-task chain |
 | Plan Guard | PASS | real T3/T2 reject→revise→approve; preapproval `PLAN_NOT_APPROVED` returned by Service; unapproved implementation file claims are rejected too |
 | File Claims | PASS | real `claim_0000000y_271b377c` conflict on `tiny-notes/shared/types.ts` returned `FILE_CLAIM_CONFLICT` |
+| Workspace/Git production path | PASS for code/test integration | `WorkspaceManager` is now mounted by the production Service; `team_file_claim` can bind claims to a workspace lease; workspace lease and fixed-argv Git suites pass |
 | Reviewer | FAIL | real Team `findings=0`, Reviewer not activated, T6 pending; no finding/fix/re-review loop |
 | Completion Guard | PASS for rejection / PARTIAL for final success | authenticated real POST to `/agent-teams/team/team_00000001_7831f216/complete` returned HTTP 400, `code=TEAM_NOT_COMPLETABLE`, with incomplete/in-progress/pending task IDs; success after final validation remains unexecuted |
 | Security | PARTIAL | unauthenticated/CSRF/cross-Team/traversal/impersonation probes rejected; no host user-principal/role auth service exists |
@@ -92,4 +94,4 @@ Adapter benchmark normalized 6 agents, 50 tasks and 200 activity/message events 
 
 ## Acceptance decision
 
-The implementation has reliable tested coordination primitives, a functional selected-Team UI, and now real public child-session/tool observability. Live Persistent Teammates, Reviewer Loop, and final completion success remain unproven because the funded provider run returned repeated quota failures. New score: **84 / 100, PARTIALLY QUALIFIED**. It must not be labeled Qualified without a funded real-provider run that closes those gates.
+The implementation has reliable tested coordination primitives, a functional selected-Team UI, and real public child-session/tool evidence from the prior funded run. Live Persistent Teammates, Reviewer Loop, and final completion success remain unproven because that provider run returned repeated quota failures. Runtime event append is explicitly process-local/non-atomic across processes, and Harness caller-principal/RBAC is not exposed by the current WebServer API. New score: **84 / 100, PARTIALLY QUALIFIED**. It must not be labeled Qualified or published as production-ready without a funded real-provider run and those production-boundary decisions being closed.

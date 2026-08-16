@@ -1,6 +1,8 @@
 # Final Integration Audit — Agent Teams V2
 
-审计对象：`C:\知识库\dsh-agent-teams` 的 `integration/agent-teams-v2` 分支，HEAD `6d01bb3`。
+审计对象：`C:\知识库\dsh-agent-teams` 的 `integration/agent-teams-v2` 分支，审计基线为 `6d01bb3`；之后的集成提交为 `b951e26`。
+
+状态说明：本报告保留独立审计当时的保守结论。后续已将 `WorkspaceManager` 挂载到生产 Service、接入生产 file-claim/tool 路径，并将合同测试纳入标准 runner；这不改变报告中 runtime event 跨进程原子性、Harness caller principal/RBAC、真实 provider 完整闭环尚未证明的结论。
 
 审计角色：最终集成审计代理。审计期间未修改源码；只新增本报告并提交。未把未执行的真实 Harness、模型或浏览器结果写成 PASS。
 
@@ -8,7 +10,7 @@
 
 **NOT QUALIFIED — CHANGES REQUIRED**
 
-当前代码已经具备较可靠的内存/单进程协调底座，且核心单元测试真实通过；但仍不能称为可 Qualified 发布的长期 Agent Teams 实现。阻断原因不是动画或测试数量，而是生产边界上的真实性与一致性：运行时事件默认不具备跨进程原子性，成员间消息是 Lead-authority relay 而不是已证明的直接 peer channel，生产 Web route 没有接入真实 caller principal/RBAC，Workspace/Git V2 域没有接入生产 Service/tools，而且本次没有运行真实 Harness Agent/浏览器 UI/provider Session。
+当前代码已经具备较可靠的内存/单进程协调底座，且核心单元测试真实通过；但仍不能称为可 Qualified 发布的长期 Agent Teams 实现。阻断原因不是动画或测试数量，而是生产边界上的真实性与一致性：运行时事件默认不具备跨进程原子性，成员间消息是 Lead-authority relay 而不是已证明的直接 peer channel，生产 Web route 没有接入真实 caller principal/RBAC，Workspace/Git 已完成第一阶段生产接入但 live lease/review cycle 尚未验证，而且本次审计没有运行真实 provider 完整闭环。
 
 ## Verification environment and commands
 
@@ -22,7 +24,7 @@
 | Git HEAD | `6d01bb3 feat: complete review and observability integration` |
 | `rtk npm run typecheck` | **PASS**；退出码 0 |
 | `rtk npm run build` | **PASS**；生成 `lib/client.js`，86550 bytes |
-| `rtk npm test` | **PASS**；88 tests、13 suites，88 pass、0 fail；包含 client bundle 检查 |
+| `rtk npm test` | **PASS**；审计基线 88 tests、13 suites；后续集成回归 103 tests、17 suites，0 fail；包含 client bundle 检查 |
 | `rtk node --test lib/core/review.test.js lib/core/workspace.test.js lib/harness/git-workspace.test.js` | **PASS**；11/11 |
 | `rtk node tests/client-module-bundle.mjs` | **PASS**；`client module bundle OK` |
 | `rtk git diff --check` | **PASS** |
@@ -150,7 +152,7 @@ Service 级冲突保护已通过：
 1. Runtime event durable append 默认 `crossProcessSafe: false`，且不是 mutation-atomic outbox。
 2. Agent-to-agent delivery 是 Lead-authority relay，未证明真实直接 peer Session delivery。
 3. 实际 Web route 没有接入 authenticated caller principal/RBAC，只使用兼容 fallback capability。
-4. Workspace/Git V2 ownership/review path 没有接入生产 Service/tools；仅 legacy file claim 入口可达。
+4. Workspace/Git V2 已接入生产 Service/tools，但跨进程 lease 原子性和完整 live lease/review cycle 尚未证明。
 5. 真实 Harness/provider/browser/UI 验收没有执行，不能把 source-level tests 当成集成验收。
 
 ## Final assessment by requested area
