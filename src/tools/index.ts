@@ -182,7 +182,7 @@ export function registerTeamTools(deps: ToolsDeps): Array<() => void> {
   );
 
   register(
-    defineTool(deps, 'team_status', 'Read one team (id, goal, lead, status).', params({ teamId: stringProp('Team id') }, ['teamId']), (args, actor, s) => s.getTeam(args.teamId)),
+    defineTool(deps, 'team_status', 'Read one team (id, goal, lead, status).', params({ teamId: stringProp('Team id') }, ['teamId']), (args, actor, s) => s.getTeamForActor(args.teamId, actor)),
   );
 
   register(
@@ -244,10 +244,10 @@ export function registerTeamTools(deps: ToolsDeps): Array<() => void> {
             signal: exec.signal,
           });
           // The harness owns the real session identity: rewrite the placeholder.
-          await s.store.put('members', member.id, { ...member, sessionId: spawn.childId, status: 'idle' });
+          await s.bindMemberSession(member.id, spawn.childId, actor);
           return { memberId: member.id, sessionId: spawn.childId, messageId: spawn.messageId };
         } catch (error) {
-          await s.store.put('members', member.id, { ...member, status: 'failed' });
+          await s.markMemberSpawnFailed(member.id, actor);
           throw error;
         }
       },
