@@ -14,6 +14,16 @@ assert.doesNotMatch(bundle, /^\s*export\s/m);
 assert.match(bundle, /data-plugin-css/);
 assert.match(bundle, /dsh-agent-teams\/command-center/);
 assert.match(bundle, /function projectVisibleSession/);
+assert.match(bundle, /function SessionItemRow/);
+assert.match(bundle, /agc-session-tool/);
+assert.match(bundle, /inspectorOpen/);
+assert.match(bundle, /selected member is open in the side panel/);
+assert.match(bundle, /agc-workspace-route-grid/);
+assert.match(bundle, /function WorkspaceSettingsCard/);
+assert.match(bundle, /description: t\.description/);
+assert.match(bundle, /labels\.result/);
+assert.match(bundle, /function resolveLabels/);
+assert.match(bundle, /function parseOverridesByLanguage/);
 
 const registrations = [];
 const context = vm.createContext({

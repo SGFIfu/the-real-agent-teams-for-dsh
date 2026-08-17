@@ -55,7 +55,7 @@ export declare const agentTeamsDomain: {
             id: string;
             teamId: string;
             fromSessionId: string;
-            type: "message" | "plan" | "question" | "result" | "warning" | "handoff" | "review" | "shutdown";
+            type: "message" | "result" | "plan" | "warning" | "question" | "handoff" | "review" | "shutdown";
             body: string;
             createdAt: number;
             toSessionId?: string | undefined;

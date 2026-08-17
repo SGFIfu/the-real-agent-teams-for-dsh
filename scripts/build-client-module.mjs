@@ -6,6 +6,7 @@ const packageRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 const clientPath = join(packageRoot, 'lib', 'client.js');
 const logicPath = join(packageRoot, 'lib', 'client', 'logic', 'control.js');
 const sessionLogicPath = join(packageRoot, 'lib', 'client', 'logic', 'session.js');
+const localeLogicPath = join(packageRoot, 'lib', 'client', 'logic', 'locale.js');
 
 /**
  * Turn a tsc-emitted ESM module into the body of the Harness client factory.
@@ -24,6 +25,7 @@ function stripModuleSyntax(source) {
 
 const logic = stripModuleSyntax(readFileSync(logicPath, 'utf8'));
 const sessionLogic = stripModuleSyntax(readFileSync(sessionLogicPath, 'utf8'));
+const localeLogic = stripModuleSyntax(readFileSync(localeLogicPath, 'utf8'));
 const client = stripModuleSyntax(readFileSync(clientPath, 'utf8'));
 
 const bundle = [
@@ -38,6 +40,7 @@ const bundle = [
   '    var React = require("react");',
   logic,
   sessionLogic,
+  localeLogic,
   client,
   '    exports.apply = apply;',
   '    exports.inject = inject;',

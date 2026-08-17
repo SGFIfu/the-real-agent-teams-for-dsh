@@ -103,10 +103,10 @@ export declare const messageSchema: z.ZodObject<{
     toSessionId: z.ZodOptional<z.ZodString>;
     type: z.ZodEnum<{
         message: "message";
-        plan: "plan";
-        question: "question";
         result: "result";
+        plan: "plan";
         warning: "warning";
+        question: "question";
         handoff: "handoff";
         review: "review";
         shutdown: "shutdown";
@@ -410,10 +410,10 @@ export declare const domainSchema: {
         toSessionId: z.ZodOptional<z.ZodString>;
         type: z.ZodEnum<{
             message: "message";
-            plan: "plan";
-            question: "question";
             result: "result";
+            plan: "plan";
             warning: "warning";
+            question: "question";
             handoff: "handoff";
             review: "review";
             shutdown: "shutdown";

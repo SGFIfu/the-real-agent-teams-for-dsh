@@ -2,9 +2,9 @@
 
 DeepSeek Harness 原生 **Agent Teams** 插件：把 Harness 从一个能调用 Subagent 的 Agent，升级成能组织**多个长期协作 Agent** 的软件团队运行时。内部 package/plugin ID 保持为 `dsh-agent-teams`，显示名为 **The Real Agent Teams for DSH**，斜杠命令 `/real-agent-teams`（别名 `/team`）。
 
-> Release status: `v0.1.0-experimental`
+> Release: `v0.1.0` · The first formal public release of **The Real Agent Teams for DSH**
 >
-> This is an experimental public release, not a production-qualified release. The latest independent acceptance result is **84/100 · PARTIALLY QUALIFIED**. Core service tests, build, persistence, atomic claiming, dependency enforcement, client registration, privacy-safe plugin Inspector projection, and real peer-message delivery passed. The real provider run was stopped by `Insufficient Balance / QUOTA` before persistent Task B closure, an independent Reviewer fix/re-review loop, and final completion could be proven.
+> Qualification note: this is a formal public release, but it is not yet production-qualified. The latest independent acceptance result is **84/100 · PARTIALLY QUALIFIED**. Core service tests, build, persistence, atomic claiming, dependency enforcement, client registration, privacy-safe plugin Inspector projection, and real peer-message delivery passed. The real provider run was stopped by `Insufficient Balance / QUOTA` before persistent Task B closure, an independent Reviewer fix/re-review loop, and final completion could be proven.
 
 ```
 Team Lead + Persistent Teammates + Shared Task Board + Task Dependencies
@@ -46,7 +46,7 @@ dsh --profile web web               # 启动后无加载错误，侧栏出现 Te
 
 - `npm run typecheck`：PASS
 - `npm run build`：PASS（生成 `lib/client.js`）
-- `npm test`：PASS（73/73）
+- `npm test`：PASS（120/120）
 - Client module registration：PASS
 - Independent acceptance：84/100，`PARTIALLY QUALIFIED`
 
@@ -72,6 +72,17 @@ Only declare the team complete after integration validation.
 ```
 
 之后 Harness 自动：理解目标 → 创建 Team → 建 Task DAG → spawn continuable teammates → 并行工作 → Agent↔Agent 通信 → 任务自认领 → 测试 → 评审 → 修复 → 集成 → `team_complete`。
+
+### 双视图团队工作台
+
+插件不会替换原生 Harness 主界面，而是提供两种可切换的观察方式：
+
+- **专注模式**：右侧轻量活动栏，保留原生 Harness 的主要工作区，同时查看当前 Team 的进度、成员状态和最近活动。
+- **团队工作台**：展开完整视图，查看真实 Agent 节点、任务依赖图、活动流、消息和 Inspector。
+
+首次打开时不会自动选择第一支 Team。点击侧栏的 **Agent Teams** 后选择目标 Team；选择结果、视图模式和语言会在浏览器本地保存，刷新后恢复到同一支 Team。
+
+面板右上角可以在中文 / English 之间切换，也可以打开设置分别自定义两种语言的常用文案。自定义只影响显示文本，不会改变 Team ID、Task ID、Session ID 或其他 Runtime 标识。
 
 其他触发方式：`组一个 agent team`、`多个智能体一起做`、`团队开发`、`multi-agent team`、`/real-agent-teams status|tasks|agents|messages`（别名 `/team`）。
 

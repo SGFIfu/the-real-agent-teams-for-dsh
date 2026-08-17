@@ -22,6 +22,7 @@ await import('../lib/core/workspace.test.js');
 await import('../lib/core/simulation.test.js');
 await import('../lib/client/logic/control.test.js');
 await import('../lib/client/logic/session.test.js');
+await import('../lib/client/logic/locale.test.js');
 await import('../lib/harness/command-route.security.test.js');
 await import('../lib/harness/git-workspace.test.js');
 await import('../lib/harness/provider-resolution.test.js');

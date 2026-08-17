@@ -21,6 +21,7 @@ export interface UiMember {
 export interface UiTask {
   id: string;
   title: string;
+  description?: string;
   status: string;
   priority: string;
   ownerSessionId?: string;
@@ -65,6 +66,8 @@ export interface UiClaim {
 export interface UiSnapshot {
   teamId: string;
   teamName: string;
+  teamGoal?: string;
+  teamCreatedAt?: number;
   leadSessionId?: string;
   teamStatus: string;
   members: UiMember[];
@@ -465,10 +468,12 @@ export function normalizeSnapshot(raw: any): UiSnapshot {
   return {
     teamId: raw.team.id,
     teamName: raw.team.name,
+    teamGoal: typeof raw.team.goal === 'string' ? raw.team.goal : undefined,
+    teamCreatedAt: typeof raw.team.createdAt === 'number' ? raw.team.createdAt : undefined,
     leadSessionId: raw.team.leadSessionId,
     teamStatus: raw.team.status,
     members: (raw.members ?? []).map((m: any) => ({ id: m.id, sessionId: m.sessionId, name: m.name, role: m.role, status: m.status, currentTaskId: m.currentTaskId })),
-    tasks: (raw.tasks ?? []).map((t: any) => ({ id: t.id, title: t.title, status: t.status, priority: t.priority, ownerSessionId: t.ownerSessionId, dependencies: t.dependencies ?? [], result: t.result })),
+    tasks: (raw.tasks ?? []).map((t: any) => ({ id: t.id, title: t.title, description: t.description, status: t.status, priority: t.priority, ownerSessionId: t.ownerSessionId, dependencies: t.dependencies ?? [], result: t.result })),
     plans: (raw.plans ?? []).map((p: any) => ({ id: p.id, taskId: p.taskId, authorSessionId: p.authorSessionId, status: p.status })),
     findings: (raw.findings ?? []).map((f: any) => ({ id: f.id, severity: f.severity, summary: f.summary, state: f.state, authorSessionId: f.authorSessionId, taskId: f.taskId })),
     messages: (raw.messages ?? []).map((m: any) => ({ id: m.id, fromSessionId: m.fromSessionId, toSessionId: m.toSessionId, type: m.type, body: m.body, createdAt: m.createdAt, deliveryState: m.deliveryState, deliveryError: m.deliveryError })),
