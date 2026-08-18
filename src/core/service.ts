@@ -60,6 +60,8 @@ export interface ServiceDeps {
 }
 
 const PRIORITY_RANK: Record<TaskPriority, number> = { critical: 0, high: 1, normal: 2, low: 3 };
+const MESSAGE_TTL_MS = 15 * 60 * 1000; // 15 minutes
+const MESSAGE_MAX_DELIVERY_ATTEMPTS = 5;
 
 function now(): number {
   return Date.now();
@@ -289,6 +291,12 @@ export class AgentTeamsService {
       return { ...current, status, updatedAt: now() };
     });
     const team = result.value as AgentTeam;
+
+    // Clean up wake retry timers when team enters a terminal or paused state
+    if (status === 'paused' || status === 'completed' || status === 'failed') {
+      await this.cleanupTeamTimers(teamId);
+    }
+
     return team;
   }
 
@@ -617,6 +625,14 @@ export class AgentTeamsService {
         await this.releaseTask(task.id, current.sessionId, 'member removed');
       }
     }
+
+    // Clean up wake retry timers for this member
+    const teamTasks = await this.store.list('tasks', (t) => t.teamId === current.teamId);
+    for (const task of teamTasks) {
+      const key = this.wakeKey(task.id, current.sessionId);
+      this.clearWakeRetry(key);
+    }
+
     await this.store.remove('members', memberId);
     this.emit(events.MEMBER_LEFT, { member: current });
   }
@@ -795,6 +811,24 @@ export class AgentTeamsService {
     }
   }
 
+  /**
+   * Cleans up all wake retry timers for a given team.
+   * Must be called when a team is paused, completed, failed, or when a member is removed.
+   */
+  private async cleanupTeamTimers(teamId: string): Promise<void> {
+    // Get all tasks for this team to identify timer keys
+    const tasks = await this.store.list('tasks', (t) => t.teamId === teamId);
+    const members = await this.store.list('members', (m) => m.teamId === teamId);
+
+    // Clear all wake retry timers for this team's task-member combinations
+    for (const task of tasks) {
+      for (const member of members) {
+        const key = this.wakeKey(task.id, member.sessionId);
+        this.clearWakeRetry(key);
+      }
+    }
+  }
+
   private scheduleWakeRetry(teamId: string, taskId: TaskId, sessionId: SessionId): void {
     const key = this.wakeKey(taskId, sessionId);
     if (this.wakeRetryTimers.has(key) || (this.wakeAttempts.get(key) ?? 0) >= AgentTeamsService.MAX_WAKE_ATTEMPTS) return;
@@ -808,7 +842,15 @@ export class AgentTeamsService {
         const ready = await this.refreshReadyTasks(teamId);
         await this.wakeEligibleWorkers(teamId, ready, sessionId);
         if (this.wakeKeys.has(key)) this.scheduleWakeRetry(teamId, taskId, sessionId);
-      })().catch(() => undefined);
+      })().catch((error) => {
+        // Log wake retry failures to prevent silent zombie workers.
+        // A failed retry doesn't mean the worker is permanently stuck - it may
+        // self-recover via retryReadyWorkers when it next becomes idle.
+        console.error(`[agent-teams] Wake retry failed for task ${taskId}, member ${sessionId}, team ${teamId}:`, error);
+        this.emit(events.WORKER_WAKEUP_RETRY_FAILED, { teamId, taskId, sessionId, error: String(error) });
+        // Clean up the wake attempt tracking to allow future retries
+        this.wakeKeys.delete(key);
+      });
     }, AgentTeamsService.WAKE_RETRY_DELAY_MS);
     timer.unref?.();
     this.wakeRetryTimers.set(key, timer);
@@ -1159,15 +1201,29 @@ export class AgentTeamsService {
   private async tryMessageDelivery(messageId: string, team: AgentTeam, retry = false): Promise<TeamMessage> {
     const current = await this.store.get('messages', messageId);
     if (current === undefined) throw teamError('MESSAGE_NOT_FOUND', 'message not found', { messageId });
+
+    // Check TTL: if message is too old, mark all pending targets as failed
+    const messageAge = now() - current.createdAt;
+    const isExpired = messageAge > MESSAGE_TTL_MS;
+
     const targets = current.deliveryTargets ?? {};
     const senderMember = await this.memberBySession(team.id, current.fromSessionId);
     const errors: string[] = [];
     let transport: TeamMessage['deliveryTransport'] = current.deliveryTransport;
+
     for (const target of Object.keys(targets)) {
       const state = targets[target];
       if (state === undefined || state.state === 'delivered' || state.state === 'acknowledged') continue;
+
+      // TTL check: fail expired messages
+      if (isExpired) {
+        targets[target] = { ...state, state: 'failed', attempts: state.attempts, error: `message expired after ${Math.floor(messageAge / 1000)}s (TTL: ${MESSAGE_TTL_MS / 1000}s)` };
+        errors.push(`${target}: message expired`);
+        continue;
+      }
+
       const attempts = state.attempts + 1;
-      if (attempts > 5) {
+      if (attempts > MESSAGE_MAX_DELIVERY_ATTEMPTS) {
         targets[target] = { ...state, state: 'failed', attempts, error: state.error ?? 'delivery retry limit exceeded' };
         errors.push(target + ': delivery retry limit exceeded');
         continue;
