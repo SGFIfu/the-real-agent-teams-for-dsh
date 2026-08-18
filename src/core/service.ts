@@ -147,6 +147,33 @@ export class AgentTeamsService {
     return { team: value, member };
   }
 
+  /**
+   * Update a member with optimistic concurrency control.
+   * Rejects stale updates by checking the version field.
+   * @returns Updated member or undefined if version conflict detected
+   */
+  private async updateMemberVersioned(
+    memberId: string,
+    expectedVersion: number | undefined,
+    updater: (current: TeamMember) => Partial<TeamMember>,
+  ): Promise<TeamMember | undefined> {
+    const result = await this.store.update('members', memberId, (current) => {
+      // If expectedVersion is provided and doesn't match, reject the update
+      if (expectedVersion !== undefined && current.version !== expectedVersion) {
+        return null; // Reject stale update
+      }
+      const patch = updater(current);
+      const nextVersion = (current.version ?? 0) + 1;
+      return {
+        ...current,
+        ...patch,
+        version: nextVersion,
+        lastActiveAt: now(),
+      };
+    });
+    return result.found && result.value !== null ? (result.value as TeamMember) : undefined;
+  }
+
   private async assertActive(team: AgentTeam): Promise<void> {
     if (team.status !== 'active') {
       throw teamError('TEAM_NOT_ACTIVE', `team ${team.id} is ${team.status}`, { teamId: team.id, status: team.status });
@@ -397,6 +424,7 @@ export class AgentTeamsService {
       capabilities: normalizeCapabilities(input.capabilities, input.role),
       joinedAt: timestamp,
       lastActiveAt: timestamp,
+      version: 1,
     };
     await this.store.put('members', id, member);
     this.emit(events.MEMBER_JOINED, { member });
@@ -414,14 +442,26 @@ export class AgentTeamsService {
     if (existing !== undefined && existing.id !== member.id) {
       throw teamError('MEMBER_ALREADY_IN_TEAM', `session ${childSessionId} already belongs to this team`, { teamId: member.teamId, sessionId: childSessionId });
     }
-    const result = await this.store.update('members', member.id, (current) => ({
-      ...current,
+    const bound = await this.updateMemberVersioned(member.id, member.version, (current) => ({
       sessionId: childSessionId,
       status: 'idle',
       lifecycleState: 'waiting_for_task',
-      lastActiveAt: now(),
     }));
-    const bound = result.value as TeamMember;
+    if (bound === undefined) {
+      // Version conflict - re-read and retry once
+      const refreshed = await this.getMember(memberId);
+      const retried = await this.updateMemberVersioned(refreshed.id, refreshed.version, (current) => ({
+        sessionId: childSessionId,
+        status: 'idle',
+        lifecycleState: 'waiting_for_task',
+      }));
+      if (retried === undefined) {
+        throw teamError('CONCURRENT_MODIFICATION', 'member state changed during bind operation', { memberId });
+      }
+      this.emit(events.MEMBER_STATUS, { member: retried, previousSessionId: member.sessionId, binding: 'native-child' });
+      await this.notifyReadyWorkers(retried.teamId);
+      return retried;
+    }
     this.emit(events.MEMBER_STATUS, { member: bound, previousSessionId: member.sessionId, binding: 'native-child' });
     await this.notifyReadyWorkers(bound.teamId);
     return bound;
@@ -430,8 +470,13 @@ export class AgentTeamsService {
   async markMemberSpawnFailed(memberId: string, actor: SessionId): Promise<TeamMember> {
     const member = await this.getMember(memberId);
     await this.requireLead(member.teamId, actor);
-    const result = await this.store.update('members', memberId, (current) => ({ ...current, status: 'failed', lifecycleState: 'failed', lastActiveAt: now() }));
-    const failed = result.value as TeamMember;
+    const failed = await this.updateMemberVersioned(member.id, member.version, () => ({
+      status: 'failed',
+      lifecycleState: 'failed',
+    }));
+    if (failed === undefined) {
+      throw teamError('CONCURRENT_MODIFICATION', 'member state changed during spawn failure', { memberId });
+    }
     this.emit(events.MEMBER_STATUS, { member: failed, spawn: 'failed' });
     return failed;
   }
@@ -455,13 +500,13 @@ export class AgentTeamsService {
   async updateMember(memberId: string, actor: SessionId, patch: Partial<Pick<TeamMember, 'status' | 'currentTaskId' | 'provider' | 'model' | 'capabilities'>>): Promise<TeamMember> {
     const current = await this.getMember(memberId);
     await this.assertActor(current.teamId, actor);
-    const result = await this.store.update('members', memberId, (m) => ({
-      ...m,
+    const updated = await this.updateMemberVersioned(memberId, current.version, (m) => ({
       ...patch,
       lifecycleState: patch.status === 'stopped' ? 'stopped' : patch.status === 'failed' ? 'failed' : m.lifecycleState,
-      lastActiveAt: now(),
     }));
-    const updated = result.value as TeamMember;
+    if (updated === undefined) {
+      throw teamError('CONCURRENT_MODIFICATION', 'member state changed during update', { memberId });
+    }
     if (patch.status !== undefined && patch.status !== current.status) {
       this.emit(events.MEMBER_STATUS, { member: updated });
     }
@@ -471,21 +516,28 @@ export class AgentTeamsService {
   async touchMember(teamId: string, sessionId: SessionId): Promise<void> {
     const member = await this.memberBySession(teamId, sessionId);
     if (member === undefined) return;
-    await this.store.update('members', member.id, (m) => ({ ...m, lastActiveAt: now() }));
+    // touchMember is low-priority, so we don't enforce version checking
+    await this.store.update('members', member.id, (m) => ({
+      ...m,
+      lastActiveAt: now(),
+      version: (m.version ?? 0) + 1,
+    }));
   }
 
   /** Sync the member's current-task metadata after a claim/finish. */
   private async syncMemberTask(teamId: string, sessionId: SessionId, taskId?: TaskId, status?: MemberStatus): Promise<void> {
     const member = await this.memberBySession(teamId, sessionId);
     if (member === undefined) return;
-    const result = await this.store.update('members', member.id, (m) => ({
-      ...m,
+    const updated = await this.updateMemberVersioned(member.id, member.version, (m) => ({
       currentTaskId: taskId,
       status: status ?? (taskId === undefined ? 'idle' : 'working'),
       lifecycleState: taskId === undefined ? 'waiting_for_task' : status === 'blocked' ? 'blocked' : 'working',
-      lastActiveAt: now(),
     }));
-    const updated = result.value as TeamMember;
+    if (updated === undefined) {
+      // Version conflict - member state changed between read and update
+      // This is acceptable for syncMemberTask; the authoritative update wins
+      return;
+    }
     if (updated.status !== member.status || updated.currentTaskId !== member.currentTaskId) {
       this.emit(events.MEMBER_STATUS, { member: updated });
     }
@@ -508,6 +560,7 @@ export class AgentTeamsService {
     const updated = result.value as TeamMember;
     if (updated.status !== current.status || updated.currentTaskId !== current.currentTaskId) this.emit(events.MEMBER_STATUS, { member: updated });
     if (effectivePatch.status === 'failed' || effectivePatch.status === 'stopped') {
+      // Release owned tasks
       const owned = await this.store.list('tasks', (task) => task.teamId === current.teamId && task.ownerSessionId === current.sessionId && (task.status === 'in_progress' || task.status === 'blocked'));
       for (const task of owned) {
         const released = await this.store.update('tasks', task.id, (value) => ({
@@ -520,6 +573,8 @@ export class AgentTeamsService {
         }));
         this.emit(events.TASK_RELEASED, { task: released.value, reason: 'member runtime ' + effectivePatch.status });
       }
+      // Clean up all resources owned by this member
+      await this.cleanupMemberResources(memberId);
       await this.notifyReadyWorkers(current.teamId);
     } else if (effectivePatch.status === 'idle') {
       await this.retryReadyWorkers(current.teamId, current.sessionId);
@@ -827,6 +882,52 @@ export class AgentTeamsService {
         this.clearWakeRetry(key);
       }
     }
+  }
+
+  /**
+   * Cleans up all resources owned by a terminated member session.
+   * Must be called when a member status changes to 'failed' or 'stopped'.
+   */
+  private async cleanupMemberResources(memberId: string): Promise<void> {
+    const member = await this.getMember(memberId);
+    const teamId = member.teamId;
+    const sessionId = member.sessionId;
+
+    // 1. Clear all wake retry timers for this member
+    const tasks = await this.store.list('tasks', (t) => t.teamId === teamId);
+    for (const task of tasks) {
+      const key = this.wakeKey(task.id, sessionId);
+      this.clearWakeRetry(key);
+    }
+
+    // 2. Clean up pending messages targeted to or from this member
+    const pendingMessages = await this.store.list('messages', (message) =>
+      message.teamId === teamId &&
+      (message.fromSessionId === sessionId || message.toSessionId === sessionId) &&
+      (message.deliveryState === 'queued' || message.deliveryState === 'pending')
+    );
+    for (const message of pendingMessages) {
+      await this.store.update('messages', message.id, (m) => ({
+        ...m,
+        deliveryState: 'failed',
+        deliveryError: `member ${memberId} terminated with status ${member.status}`,
+      }));
+    }
+
+    // 3. Release all file claims owned by this member
+    const ownedClaims = await this.store.list('file_claims', (claim) =>
+      claim.teamId === teamId && claim.ownerSessionId === sessionId
+    );
+    for (const claim of ownedClaims) {
+      await this.store.delete('file_claims', claim.id);
+      this.emit(events.FILE_RELEASED, {
+        claim,
+        reason: `member ${memberId} terminated with status ${member.status}`
+      });
+    }
+
+    // Note: Task cleanup is already handled by the caller (updateMemberFromRuntime)
+    // to release in_progress and blocked tasks
   }
 
   private scheduleWakeRetry(teamId: string, taskId: TaskId, sessionId: SessionId): void {
@@ -1417,26 +1518,32 @@ export class AgentTeamsService {
     if (plan.status !== 'submitted') {
       throw teamError('INVALID_INPUT', `plan ${planId} is ${plan.status} and cannot be approved`, { planId, status: plan.status });
     }
-    const result = await this.store.update('plans', planId, (current) => current.status === 'submitted'
-      ? { ...current, status: 'approved', feedback, reviewedAt: now() }
-      : current);
-    const approved = result.value as TeamPlan;
-    if (approved.status !== 'approved') {
-      throw teamError('INVALID_INPUT', `plan ${planId} changed before approval`, { planId, status: approved.status });
-    }
-    // The task becomes claimable again. Clear the member's stale blocked state
-    // as well; otherwise the UI can report a working task after approval.
-    const taskBefore = await this.requireTask(plan.taskId);
-    await this.store.update('tasks', plan.taskId, (current) =>
-      current.status === 'blocked' ? { ...current, status: 'pending', ownerSessionId: undefined, startedAt: undefined } : current,
-    );
-    if (taskBefore.status === 'blocked' && taskBefore.ownerSessionId !== undefined) {
-      await this.syncMemberTask(plan.teamId, taskBefore.ownerSessionId, undefined, 'idle');
-    }
-    this.emit(events.PLAN_APPROVED, { plan: approved });
-    const ready = await this.refreshReadyTasks(plan.teamId);
-    await this.wakeEligibleWorkers(plan.teamId, ready);
-    return approved;
+
+    // Wrap the entire approval process in a team mutation to prevent race conditions.
+    // The task owner must be released atomically with the member status update to avoid
+    // inconsistent states where the task is released but the member still appears blocked.
+    return this.withTeamMutation(plan.teamId, async () => {
+      const result = await this.store.update('plans', planId, (current) => current.status === 'submitted'
+        ? { ...current, status: 'approved', feedback, reviewedAt: now() }
+        : current);
+      const approved = result.value as TeamPlan;
+      if (approved.status !== 'approved') {
+        throw teamError('INVALID_INPUT', `plan ${planId} changed before approval`, { planId, status: approved.status });
+      }
+      // The task becomes claimable again. Clear the member's stale blocked state
+      // as well; otherwise the UI can report a working task after approval.
+      const taskBefore = await this.requireTask(plan.taskId);
+      await this.store.update('tasks', plan.taskId, (current) =>
+        current.status === 'blocked' ? { ...current, status: 'pending', ownerSessionId: undefined, startedAt: undefined } : current,
+      );
+      if (taskBefore.status === 'blocked' && taskBefore.ownerSessionId !== undefined) {
+        await this.syncMemberTask(plan.teamId, taskBefore.ownerSessionId, undefined, 'idle');
+      }
+      this.emit(events.PLAN_APPROVED, { plan: approved });
+      const ready = await this.refreshReadyTasks(plan.teamId);
+      await this.wakeEligibleWorkers(plan.teamId, ready);
+      return approved;
+    });
   }
 
   async rejectPlan(planId: string, actor: SessionId, feedback: string): Promise<TeamPlan> {
@@ -1448,24 +1555,29 @@ export class AgentTeamsService {
     if (plan.status !== 'submitted') {
       throw teamError('INVALID_INPUT', `plan ${planId} is ${plan.status} and cannot be rejected`, { planId, status: plan.status });
     }
-    const result = await this.store.update('plans', planId, (current) => current.status === 'submitted'
-      ? { ...current, status: 'rejected', feedback, reviewedAt: now() }
-      : current);
-    const rejected = result.value as TeamPlan;
-    if (rejected.status !== 'rejected') {
-      throw teamError('INVALID_INPUT', `plan ${planId} changed before rejection`, { planId, status: rejected.status });
-    }
-    const taskBefore = await this.requireTask(plan.taskId);
-    await this.store.update('tasks', plan.taskId, (current) =>
-      current.status === 'blocked' ? { ...current, status: 'pending', ownerSessionId: undefined, startedAt: undefined } : current,
-    );
-    if (taskBefore.status === 'blocked' && taskBefore.ownerSessionId !== undefined) {
-      await this.syncMemberTask(plan.teamId, taskBefore.ownerSessionId, undefined, 'idle');
-    }
-    this.emit(events.PLAN_REJECTED, { plan: rejected });
-    const ready = await this.refreshReadyTasks(plan.teamId);
-    await this.wakeEligibleWorkers(plan.teamId, ready);
-    return rejected;
+
+    // Wrap the entire rejection process in a team mutation to prevent race conditions,
+    // similar to approvePlan. The task owner must be released atomically with member status.
+    return this.withTeamMutation(plan.teamId, async () => {
+      const result = await this.store.update('plans', planId, (current) => current.status === 'submitted'
+        ? { ...current, status: 'rejected', feedback, reviewedAt: now() }
+        : current);
+      const rejected = result.value as TeamPlan;
+      if (rejected.status !== 'rejected') {
+        throw teamError('INVALID_INPUT', `plan ${planId} changed before rejection`, { planId, status: rejected.status });
+      }
+      const taskBefore = await this.requireTask(plan.taskId);
+      await this.store.update('tasks', plan.taskId, (current) =>
+        current.status === 'blocked' ? { ...current, status: 'pending', ownerSessionId: undefined, startedAt: undefined } : current,
+      );
+      if (taskBefore.status === 'blocked' && taskBefore.ownerSessionId !== undefined) {
+        await this.syncMemberTask(plan.teamId, taskBefore.ownerSessionId, undefined, 'idle');
+      }
+      this.emit(events.PLAN_REJECTED, { plan: rejected });
+      const ready = await this.refreshReadyTasks(plan.teamId);
+      await this.wakeEligibleWorkers(plan.teamId, ready);
+      return rejected;
+    });
   }
 
   private async requirePlan(planId: string): Promise<TeamPlan> {
