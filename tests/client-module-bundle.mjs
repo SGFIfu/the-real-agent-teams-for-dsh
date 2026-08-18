@@ -20,9 +20,10 @@ assert.match(bundle, /agc-session-tool/);
 assert.match(bundle, /selected member is open in the side panel/);
 assert.match(bundle, /agc-workspace-route-grid/);
 
-// Locale and label checks
+// Locale and label checks (variable names may be minified)
 assert.match(bundle, /labels\./); // labels access
-assert.match(bundle, /resolveLabels/); // function name may or may not be minified
+assert.match(bundle, /DSH 真正的 Agent Teams/); // Chinese locale present
+assert.match(bundle, /The Real Agent Teams for DSH/); // English locale present
 
 // Test runtime registration
 const registrations = [];
