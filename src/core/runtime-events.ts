@@ -211,13 +211,17 @@ export class RuntimeEventLog {
   }
 
   private async listTeam(teamId: TeamId): Promise<RuntimeEvent[]> {
-    const records = await this.store.list('runtime_events', (event) => event.teamId === teamId);
+    const records = await this.store.list('runtime_events', (event) =>
+      event.teamId === teamId && !event.id.startsWith('__runtime_events_counter__:')
+    );
     return records.map(parseEvent).sort((a, b) => a.sequence - b.sequence);
   }
 
   private async findByDedupe(teamId: TeamId, dedupeKey: string | undefined): Promise<RuntimeEvent | undefined> {
     if (dedupeKey === undefined) return undefined;
-    const records = await this.store.list('runtime_events', (event) => event.teamId === teamId && event.dedupeKey === dedupeKey);
+    const records = await this.store.list('runtime_events', (event) =>
+      event.teamId === teamId && event.dedupeKey === dedupeKey && !event.id.startsWith('__runtime_events_counter__:')
+    );
     const event = records[0];
     return event === undefined ? undefined : parseEvent(event);
   }

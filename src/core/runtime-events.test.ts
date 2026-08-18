@@ -94,4 +94,28 @@ describe('runtime event audit/recovery helper', () => {
       Array.from({ length: 32 }, (_, index) => index + 1),
     );
   });
+
+  it('filters out internal counter records from event listings', async () => {
+    const store = new MemoryStore();
+    const log = createRuntimeEventLog(store);
+
+    // Append events to trigger counter creation
+    await log.append(event(TEAM_A, 'event_one'));
+    await log.append(event(TEAM_A, 'event_two'));
+    await log.append(event(TEAM_B, 'other_team_event'));
+
+    // Verify the counter records exist in the store
+    const allRecords = await store.list('runtime_events');
+    const counterRecords = allRecords.filter((r) => r.id.startsWith('__runtime_events_counter__:'));
+
+    // Counter records should exist internally but not appear in read results
+    const teamAEvents = await log.read(TEAM_A, { visibility: 'all' });
+    const teamBEvents = await log.read(TEAM_B, { visibility: 'all' });
+
+    // No counter records should appear in the event listings
+    assert.equal(teamAEvents.events.length, 2);
+    assert.equal(teamBEvents.events.length, 1);
+    assert.ok(teamAEvents.events.every((e) => !e.id.startsWith('__runtime_events_counter__:')));
+    assert.ok(teamBEvents.events.every((e) => !e.id.startsWith('__runtime_events_counter__:')));
+  });
 });
