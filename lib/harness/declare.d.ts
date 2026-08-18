@@ -65,6 +65,12 @@ declare module '@deepseek-ai/cordis' {
             targetSessionId: string;
             error: string;
         }): void;
+        'agent-teams/worker-wakeup-retry-failed'(payload: {
+            teamId: string;
+            taskId: string;
+            sessionId: string;
+            error: string;
+        }): void;
         'agent-teams/message-sent'(payload: {
             message: TeamMessage;
         }): void;

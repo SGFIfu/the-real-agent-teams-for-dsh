@@ -38,6 +38,7 @@ declare module '@deepseek-ai/cordis' {
     'agent-teams/task-unschedulable'(payload: { task: TeamTask; reason: string }): void;
     'agent-teams/worker-wakeup-requested'(payload: { task: TeamTask; targetSessionId: string }): void;
     'agent-teams/worker-wakeup-failed'(payload: { task: TeamTask; targetSessionId: string; error: string }): void;
+    'agent-teams/worker-wakeup-retry-failed'(payload: { teamId: string; taskId: string; sessionId: string; error: string }): void;
 
     'agent-teams/message-sent'(payload: { message: TeamMessage }): void;
     'agent-teams/message-delivery-failed'(payload: { message: TeamMessage; error: string }): void;

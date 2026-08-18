@@ -24,3 +24,16 @@ test('preference parsing keeps Chinese and English overrides independent', () =>
   assert.equal(resolveLabels('zh-CN', parsed['zh-CN']).members, '成员');
   assert.equal(resolveLabels('en-US', parsed['en-US']).members, 'Crew');
 });
+
+test('error boundary labels are present in both languages', () => {
+  const zh = defaultLabels('zh-CN');
+  const en = defaultLabels('en-US');
+  assert.ok(zh.errorBoundaryTitle);
+  assert.ok(zh.errorBoundaryMessage);
+  assert.ok(zh.errorBoundaryRetry);
+  assert.ok(zh.errorBoundaryDetails);
+  assert.ok(en.errorBoundaryTitle);
+  assert.ok(en.errorBoundaryMessage);
+  assert.ok(en.errorBoundaryRetry);
+  assert.ok(en.errorBoundaryDetails);
+});

@@ -54,6 +54,10 @@ export interface UiLabels {
     readonly completed: string;
     readonly noTeams: string;
     readonly teamNotFound: string;
+    readonly errorBoundaryTitle: string;
+    readonly errorBoundaryMessage: string;
+    readonly errorBoundaryRetry: string;
+    readonly errorBoundaryDetails: string;
 }
 export type UiLabelOverrides = Partial<Record<keyof UiLabels, string>>;
 export type UiLabelOverridesByLanguage = Partial<Record<UiLanguage, UiLabelOverrides>>;

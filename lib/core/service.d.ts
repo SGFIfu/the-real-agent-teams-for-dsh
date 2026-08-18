@@ -161,6 +161,11 @@ export declare class AgentTeamsService {
     private refreshReadyTasks;
     private wakeKey;
     private clearWakeRetry;
+    /**
+     * Cleans up all wake retry timers for a given team.
+     * Must be called when a team is paused, completed, failed, or when a member is removed.
+     */
+    private cleanupTeamTimers;
     private scheduleWakeRetry;
     private notifyReadyWorkers;
     /** Re-check authoritative state when a native worker becomes idle. */
