@@ -498,13 +498,15 @@ function CompactActivity(props: {
   readonly language: UiLanguage;
   readonly connection: 'connected' | 'reconnecting';
   readonly recoveredEventsCount: number;
+  readonly teams: Array<{ id: string; name?: string; goal?: string; status?: string }>;
   readonly onOpen: (sessionId: string) => void;
   readonly onExpand: () => void;
   readonly onClose: () => void;
+  readonly onTeamSelect: (teamId: string) => void;
   readonly onLanguage: () => void;
   readonly onPreferences: () => void;
 }) : any {
-  const { snapshot, activity, labels, language, connection, recoveredEventsCount, onOpen, onExpand, onClose, onLanguage, onPreferences } = props;
+  const { snapshot, activity, labels, language, connection, recoveredEventsCount, teams, onOpen, onExpand, onClose, onTeamSelect, onLanguage, onPreferences } = props;
   const done = snapshot.progress.requiredDone;
   const total = snapshot.progress.requiredTotal || snapshot.tasks.length;
   const ratio = Math.round(snapshot.progress.ratio * 100);
@@ -537,10 +539,22 @@ function CompactActivity(props: {
     React.createElement('div', { className: 'agc-compact-body' },
       React.createElement('section', { className: 'agc-compact-team' },
         React.createElement('span', { className: 'agc-avatar', 'aria-hidden': true }, '👑'),
-        React.createElement('span', { className: 'agc-compact-team-copy' },
-          React.createElement('span', { className: 'agc-compact-team-name' }, snapshot.teamName),
-          React.createElement('span', { className: 'agc-compact-team-meta' }, `${snapshot.members.length} ${labels.members} · ${snapshot.teamGoal ?? snapshot.teamStatus}`),
-        ),
+        teams.length > 1
+          ? React.createElement('select', {
+              className: 'agc-team-selector',
+              value: snapshot.teamId,
+              onChange: (event: any) => onTeamSelect(event.target.value),
+              'aria-label': labels.agentTeams,
+              style: { flex: 1, minWidth: 0, padding: '4px 8px', fontSize: '13px', fontWeight: 600, border: '1px solid var(--agc-border)', borderRadius: '4px', background: 'var(--agc-input-bg)', color: 'var(--agc-text)' }
+            },
+            teams.map((team) => React.createElement('option', { key: team.id, value: team.id },
+              `${team.name ?? team.id} · ${team.status ?? 'active'}`
+            ))
+          )
+          : React.createElement('span', { className: 'agc-compact-team-copy' },
+            React.createElement('span', { className: 'agc-compact-team-name' }, snapshot.teamName),
+            React.createElement('span', { className: 'agc-compact-team-meta' }, `${snapshot.members.length} ${labels.members} · ${snapshot.teamGoal ?? snapshot.teamStatus}`),
+          ),
         React.createElement('span', { className: `agc-status ${snapshot.teamStatus === 'completed' ? 'st-completed' : 'st-working'}` }, snapshot.teamStatus === 'completed' ? '✓' : '●'),
       ),
       React.createElement('section', { className: 'agc-compact-progress', 'aria-label': labels.overallProgress },
@@ -648,8 +662,13 @@ function PreferencesDialog(props: {
   );
 }
 
-function WorkspaceOverview(props: { readonly snapshot: UiSnapshot; readonly labels: UiLabels }): any {
-  const { snapshot, labels } = props;
+function WorkspaceOverview(props: {
+  readonly snapshot: UiSnapshot;
+  readonly labels: UiLabels;
+  readonly teams?: Array<{ id: string; name?: string; goal?: string; status?: string }>;
+  readonly onTeamSelect?: (teamId: string) => void;
+}): any {
+  const { snapshot, labels, teams = [], onTeamSelect } = props;
   const counts = statusCounts(snapshot.members);
   const working = (counts.working ?? 0) + (counts.thinking ?? 0) + (counts.starting ?? 0);
   const waiting = (counts.waiting ?? 0) + (counts.blocked ?? 0);
@@ -665,10 +684,25 @@ function WorkspaceOverview(props: { readonly snapshot: UiSnapshot; readonly labe
     React.createElement('div', { className: 'agc-overview-row' },
       React.createElement('div', { className: 'agc-captain-card' },
         React.createElement('span', { className: 'agc-avatar agc-avatar-large', 'aria-hidden': true }, '🐳'),
-        React.createElement('span', null,
-          React.createElement('strong', null, snapshot.teamName),
-          React.createElement('small', null, `${working > 0 ? `${working} ${labels.working}` : labels.waiting}${snapshot.teamGoal === undefined ? '' : ` · ${snapshot.teamGoal}`}`),
-        ),
+        teams.length > 1 && onTeamSelect !== undefined
+          ? React.createElement('div', { style: { flex: 1 } },
+              React.createElement('select', {
+                className: 'agc-team-selector-workspace',
+                value: snapshot.teamId,
+                onChange: (event: any) => onTeamSelect(event.target.value),
+                'aria-label': labels.agentTeams,
+                style: { fontSize: '14px', fontWeight: 600, padding: '6px 10px', border: '1px solid var(--agc-border)', borderRadius: '4px', background: 'var(--agc-input-bg)', color: 'var(--agc-text)', cursor: 'pointer', marginBottom: '4px', width: '100%' }
+              },
+              teams.map((team) => React.createElement('option', { key: team.id, value: team.id },
+                `${team.name ?? team.id} (${team.status ?? 'active'})`
+              ))
+            ),
+            React.createElement('small', { style: { display: 'block' } }, `${working > 0 ? `${working} ${labels.working}` : labels.waiting}${snapshot.teamGoal === undefined ? '' : ` · ${snapshot.teamGoal}`}`),
+          )
+          : React.createElement('span', null,
+            React.createElement('strong', null, snapshot.teamName),
+            React.createElement('small', null, `${working > 0 ? `${working} ${labels.working}` : labels.waiting}${snapshot.teamGoal === undefined ? '' : ` · ${snapshot.teamGoal}`}`),
+          ),
         React.createElement('span', { className: 'agc-captain-mark' }, '✦'),
       ),
       React.createElement('div', { className: 'agc-status-card' },
@@ -901,6 +935,7 @@ function WorkspaceLayout(props: {
   submittedPlans: UiSnapshot['plans'];
   blockers: string[];
   openFindings: UiSnapshot['findings'];
+  teams?: Array<{ id: string; name?: string; goal?: string; status?: string }>;
   onTab: (tab: WorkspaceTab) => void;
   onSettings: () => void;
   onOpen: (sessionId: string) => void;
@@ -908,10 +943,11 @@ function WorkspaceLayout(props: {
   onTask: (task: UiTask) => void;
   onClose: () => void;
   onBack?: () => void;
+  onTeamSelect?: (teamId: string) => void;
   onLanguage: () => void;
   onPreferences: () => void;
 }): any {
-  const { snapshot, activity, labels, language, bridge, session, sessionId, inspectorOpen, depFlash, connection, recoveredEventsCount, activeTab, submittedPlans, blockers, openFindings, onTab, onSettings, onOpen, onActivity, onTask, onClose, onBack, onLanguage, onPreferences } = props;
+  const { snapshot, activity, labels, language, bridge, session, sessionId, inspectorOpen, depFlash, connection, recoveredEventsCount, activeTab, submittedPlans, blockers, openFindings, teams = [], onTab, onSettings, onOpen, onActivity, onTask, onClose, onBack, onTeamSelect, onLanguage, onPreferences } = props;
   const memberName = (sid: string): string => snapshot.members.find((member) => member.sessionId === sid)?.name ?? sid.slice(0, 8);
   const overviewGrid = React.createElement('div', { className: 'agc-workspace-grid', 'data-active-tab': activeTab },
     React.createElement(TeamSummaryCard, { snapshot, labels }),
@@ -1144,8 +1180,10 @@ function CommandCenter(props: {
   bridge: Bridge;
   ctx: any;
   teamId: string;
+  teams?: Array<{ id: string; name?: string; goal?: string; status?: string }>;
   onClose: () => void;
   onBack?: () => void;
+  onTeamSelect?: (teamId: string) => void;
   compact?: boolean;
   labels: UiLabels;
   language: UiLanguage;
@@ -1153,7 +1191,7 @@ function CommandCenter(props: {
   onLanguage?: () => void;
   onPreferences?: () => void;
 }): any {
-  const { bridge, ctx, teamId, onClose, onBack, compact = false, labels, language, onExpand, onLanguage, onPreferences } = props;
+  const { bridge, ctx, teamId, teams = [], onClose, onBack, onTeamSelect, compact = false, labels, language, onExpand, onLanguage, onPreferences } = props;
   const timer = timerOf(ctx);
   const [snapshot, setSnapshot] = React.useState<UiSnapshot | null>(null);
   const [activity, setActivity] = React.useState<BufferedActivity[]>([]);
@@ -1348,9 +1386,11 @@ function CommandCenter(props: {
         language,
         connection,
         recoveredEventsCount,
+        teams,
         onOpen: openInspector,
         onExpand: onExpand ?? (() => {}),
         onClose,
+        onTeamSelect: onTeamSelect ?? (() => {}),
         onLanguage: onLanguage ?? (() => {}),
         onPreferences: onPreferences ?? (() => {}),
       }),
@@ -1376,6 +1416,7 @@ function CommandCenter(props: {
         submittedPlans,
         blockers,
         openFindings,
+        teams,
         onTab: setWorkspaceTab,
         onSettings: () => setWorkspaceTab('settings'),
         onOpen: openInspector,
@@ -1383,6 +1424,7 @@ function CommandCenter(props: {
         onTask: (task: UiTask) => setTaskInspector(task.id),
         onClose,
         onBack,
+        onTeamSelect,
         onLanguage: onLanguage ?? (() => {}),
         onPreferences: onPreferences ?? (() => {}),
       }),
@@ -1437,7 +1479,7 @@ function CommandCenter(props: {
     ),
     React.createElement('div', { className: 'agc-body' },
       React.createElement('div', { className: 'agc-main' },
-        React.createElement(WorkspaceOverview, { snapshot, labels }),
+        React.createElement(WorkspaceOverview, { snapshot, labels, teams, onTeamSelect }),
         observe.length > 0
           ? React.createElement('div', { className: 'agc-observe' },
               observe.map((sessionId) => {
@@ -1672,10 +1714,11 @@ export function apply(ctx: any): void {
     return React.createElement(React.Fragment, null,
       React.createElement('button', { className: 'agc-btn', onClick: () => setPanelOpen(true), 'aria-expanded': panelOpen, 'aria-controls': 'agent-teams-panel' }, labels.agentTeams),
       panelOpen && selectedTeamId !== null && selectedExists && React.createElement(CommandCenter, {
-        bridge, ctx, teamId: selectedTeamId, compact: mode === 'compact', labels, language,
+        bridge, ctx, teamId: selectedTeamId, teams, compact: mode === 'compact', labels, language,
         onBack: () => selectTeam(null),
         onClose: mode === 'compact' ? () => setPanelOpen(false) : () => setViewMode('compact'),
         onExpand: () => setViewMode('workspace'),
+        onTeamSelect: selectTeam,
         onLanguage: toggleLanguage,
         onPreferences: () => setPreferencesOpen(true),
       }),
