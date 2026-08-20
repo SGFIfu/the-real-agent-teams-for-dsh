@@ -40,6 +40,7 @@ import type {
   WorkspaceManager,
 } from './workspace.ts';
 import { capabilityAudit, classifyToolCapability, hasCapabilities, normalizeCapabilities, type ToolCapabilityDecision } from './capabilities.ts';
+import { resolveEffectiveStatus, validateTransition } from './member-state-machine.ts';
 
 export interface ServiceDeps {
   store: TeamStore;
@@ -528,10 +529,21 @@ export class AgentTeamsService {
   private async syncMemberTask(teamId: string, sessionId: SessionId, taskId?: TaskId, status?: MemberStatus): Promise<void> {
     const member = await this.memberBySession(teamId, sessionId);
     if (member === undefined) return;
+
+    // Determine target status
+    const targetStatus = status ?? (taskId === undefined ? 'idle' : 'working');
+
+    // Validate state transition
+    const validation = validateTransition(member.status, targetStatus);
+    if (!validation.valid) {
+      console.warn(`[agent-teams] syncMemberTask rejected: ${validation.error}`, { memberId: member.id, current: member.status, target: targetStatus });
+      return;
+    }
+
     const updated = await this.updateMemberVersioned(member.id, member.version, (m) => ({
       currentTaskId: taskId,
-      status: status ?? (taskId === undefined ? 'idle' : 'working'),
-      lifecycleState: taskId === undefined ? 'waiting_for_task' : status === 'blocked' ? 'blocked' : 'working',
+      status: targetStatus,
+      lifecycleState: taskId === undefined ? 'waiting_for_task' : targetStatus === 'blocked' ? 'blocked' : 'working',
     }));
     if (updated === undefined) {
       // Version conflict - member state changed between read and update
@@ -546,15 +558,20 @@ export class AgentTeamsService {
   /** Native lifecycle bridge update; authorization is supplied by the host event source. */
   async updateMemberFromRuntime(memberId: string, patch: Partial<Pick<TeamMember, 'status' | 'currentTaskId'>>): Promise<TeamMember> {
     const current = await this.getMember(memberId);
-    const effectivePatch = patch.status === 'idle' && current.currentTaskId !== undefined && (current.status === 'working' || current.status === 'blocked')
-      ? { ...patch, status: current.status }
-      : patch;
-    const terminalRuntimeState = effectivePatch.status === 'failed' || effectivePatch.status === 'stopped';
+
+    // Use state machine to resolve effective status, preventing invalid transitions
+    const desiredStatus = patch.status ?? current.status;
+    const hasActiveTask = current.currentTaskId !== undefined && (current.status === 'working' || current.status === 'blocked');
+    const effectiveStatus = resolveEffectiveStatus(current.status, desiredStatus, hasActiveTask);
+
+    // Build effective patch with validated status
+    const effectivePatch = { ...patch, status: effectiveStatus };
+    const terminalRuntimeState = effectiveStatus === 'failed' || effectiveStatus === 'stopped';
 
     const updated = await this.updateMemberVersioned(memberId, current.version, (m) => ({
       ...effectivePatch,
       ...(terminalRuntimeState ? { currentTaskId: undefined } : {}),
-      lifecycleState: effectivePatch.status === 'failed' ? 'failed' : effectivePatch.status === 'stopped' ? 'stopped' : effectivePatch.status === 'working' ? 'working' : effectivePatch.status === 'idle' ? 'waiting_for_task' : m.lifecycleState,
+      lifecycleState: effectiveStatus === 'failed' ? 'failed' : effectiveStatus === 'stopped' ? 'stopped' : effectiveStatus === 'working' ? 'working' : effectiveStatus === 'idle' ? 'waiting_for_task' : m.lifecycleState,
     }));
 
     if (updated === undefined) {
@@ -563,15 +580,20 @@ export class AgentTeamsService {
       const refreshed = await this.getMember(memberId);
 
       // If the refreshed state already reflects what we're trying to do, no retry needed
-      if (refreshed.status === effectivePatch.status) {
+      if (refreshed.status === effectiveStatus) {
         return refreshed;
       }
 
+      // Recalculate effective status with refreshed state
+      const refreshedHasTask = refreshed.currentTaskId !== undefined && (refreshed.status === 'working' || refreshed.status === 'blocked');
+      const retryEffectiveStatus = resolveEffectiveStatus(refreshed.status, desiredStatus, refreshedHasTask);
+      const retryTerminal = retryEffectiveStatus === 'failed' || retryEffectiveStatus === 'stopped';
+
       // Otherwise retry once with the new version
       const retried = await this.updateMemberVersioned(memberId, refreshed.version, (m) => ({
-        ...effectivePatch,
-        ...(terminalRuntimeState ? { currentTaskId: undefined } : {}),
-        lifecycleState: effectivePatch.status === 'failed' ? 'failed' : effectivePatch.status === 'stopped' ? 'stopped' : effectivePatch.status === 'working' ? 'working' : effectivePatch.status === 'idle' ? 'waiting_for_task' : m.lifecycleState,
+        status: retryEffectiveStatus,
+        ...(retryTerminal ? { currentTaskId: undefined } : {}),
+        lifecycleState: retryEffectiveStatus === 'failed' ? 'failed' : retryEffectiveStatus === 'stopped' ? 'stopped' : retryEffectiveStatus === 'working' ? 'working' : retryEffectiveStatus === 'idle' ? 'waiting_for_task' : m.lifecycleState,
       }));
 
       if (retried === undefined) {
@@ -584,7 +606,7 @@ export class AgentTeamsService {
         this.emit(events.MEMBER_STATUS, { member: retried });
       }
 
-      if (effectivePatch.status === 'failed' || effectivePatch.status === 'stopped') {
+      if (retryEffectiveStatus === 'failed' || retryEffectiveStatus === 'stopped') {
         const owned = await this.store.list('tasks', (task) => task.teamId === current.teamId && task.ownerSessionId === current.sessionId && (task.status === 'in_progress' || task.status === 'blocked'));
         for (const task of owned) {
           const released = await this.store.update('tasks', task.id, (value) => ({
@@ -593,13 +615,13 @@ export class AgentTeamsService {
             availability: 'ready',
             ownerSessionId: undefined,
             startedAt: undefined,
-            result: (value.result ?? '') + '\n[released: member runtime ' + effectivePatch.status + ']'
+            result: (value.result ?? '') + '\n[released: member runtime ' + retryEffectiveStatus + ']'
           }));
-          this.emit(events.TASK_RELEASED, { task: released.value, reason: 'member runtime ' + effectivePatch.status });
+          this.emit(events.TASK_RELEASED, { task: released.value, reason: 'member runtime ' + retryEffectiveStatus });
         }
         await this.cleanupMemberResources(memberId);
         await this.notifyReadyWorkers(current.teamId);
-      } else if (effectivePatch.status === 'idle') {
+      } else if (retryEffectiveStatus === 'idle') {
         await this.retryReadyWorkers(current.teamId, current.sessionId);
       }
 
@@ -610,7 +632,7 @@ export class AgentTeamsService {
       this.emit(events.MEMBER_STATUS, { member: updated });
     }
 
-    if (effectivePatch.status === 'failed' || effectivePatch.status === 'stopped') {
+    if (effectiveStatus === 'failed' || effectiveStatus === 'stopped') {
       const owned = await this.store.list('tasks', (task) => task.teamId === current.teamId && task.ownerSessionId === current.sessionId && (task.status === 'in_progress' || task.status === 'blocked'));
       for (const task of owned) {
         const released = await this.store.update('tasks', task.id, (value) => ({
@@ -619,13 +641,13 @@ export class AgentTeamsService {
           availability: 'ready',
           ownerSessionId: undefined,
           startedAt: undefined,
-          result: (value.result ?? '') + '\n[released: member runtime ' + effectivePatch.status + ']'
+          result: (value.result ?? '') + '\n[released: member runtime ' + effectiveStatus + ']'
         }));
-        this.emit(events.TASK_RELEASED, { task: released.value, reason: 'member runtime ' + effectivePatch.status });
+        this.emit(events.TASK_RELEASED, { task: released.value, reason: 'member runtime ' + effectiveStatus });
       }
       await this.cleanupMemberResources(memberId);
       await this.notifyReadyWorkers(current.teamId);
-    } else if (effectivePatch.status === 'idle') {
+    } else if (effectiveStatus === 'idle') {
       await this.retryReadyWorkers(current.teamId, current.sessionId);
     }
 

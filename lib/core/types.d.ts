@@ -89,6 +89,8 @@ export interface TeamMember {
     eventCursor?: number;
     joinedAt: number;
     lastActiveAt: number;
+    /** Optimistic concurrency control version; incremented on every state update. */
+    version?: number;
 }
 export type TaskStatus = 'pending' | 'in_progress' | 'blocked' | 'completed' | 'failed' | 'cancelled';
 export type TaskAvailability = 'locked' | 'ready';

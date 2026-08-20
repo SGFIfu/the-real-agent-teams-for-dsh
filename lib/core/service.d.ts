@@ -54,6 +54,12 @@ export declare class AgentTeamsService {
     private emit;
     private appendRuntimeEvent;
     private assertActor;
+    /**
+     * Update a member with optimistic concurrency control.
+     * Rejects stale updates by checking the version field.
+     * @returns Updated member or undefined if version conflict detected
+     */
+    private updateMemberVersioned;
     private assertActive;
     private requireLead;
     private withTeamMutation;
@@ -166,6 +172,11 @@ export declare class AgentTeamsService {
      * Must be called when a team is paused, completed, failed, or when a member is removed.
      */
     private cleanupTeamTimers;
+    /**
+     * Cleans up all resources owned by a terminated member session.
+     * Must be called when a member status changes to 'failed' or 'stopped'.
+     */
+    private cleanupMemberResources;
     private scheduleWakeRetry;
     private notifyReadyWorkers;
     /** Re-check authoritative state when a native worker becomes idle. */

@@ -36,7 +36,9 @@ export async function makeFixture(memberRoles: Array<{ name: string; role: strin
   const service = makeService(store);
   const team = await service.createTeam({ name: 'test-team', goal: 'ship the feature', leadSessionId: S.lead, workspaceId: 'ws-1' });
   for (const member of memberRoles) {
-    await service.registerMember({ teamId: team.id, sessionId: member.sessionId, name: member.name, role: member.role, actor: S.lead });
+    const registered = await service.registerMember({ teamId: team.id, sessionId: member.sessionId, name: member.name, role: member.role, actor: S.lead });
+    // Directly set member to 'idle' for testing (bypasses state machine for test convenience)
+    await service.updateMember(registered.id, S.lead, { status: 'idle' });
   }
   return { store, service, teamId: team.id };
 }

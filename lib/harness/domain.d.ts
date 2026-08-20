@@ -29,6 +29,7 @@ export declare const agentTeamsDomain: {
             capabilities?: string[] | undefined;
             workspaceId?: string | undefined;
             eventCursor?: number | undefined;
+            version?: number | undefined;
         }>;
         tasks: import("@deepseek-ai/dsh-storage-domain").DomainTableSpec<string, {
             id: string;

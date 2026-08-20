@@ -57,6 +57,7 @@ export declare const memberSchema: z.ZodObject<{
     capabilities: z.ZodOptional<z.ZodArray<z.ZodString>>;
     workspaceId: z.ZodOptional<z.ZodString>;
     eventCursor: z.ZodOptional<z.ZodNumber>;
+    version: z.ZodOptional<z.ZodNumber>;
     joinedAt: z.ZodNumber;
     lastActiveAt: z.ZodNumber;
 }, z.core.$strip>;
@@ -364,6 +365,7 @@ export declare const domainSchema: {
         capabilities: z.ZodOptional<z.ZodArray<z.ZodString>>;
         workspaceId: z.ZodOptional<z.ZodString>;
         eventCursor: z.ZodOptional<z.ZodNumber>;
+        version: z.ZodOptional<z.ZodNumber>;
         joinedAt: z.ZodNumber;
         lastActiveAt: z.ZodNumber;
     }, z.core.$strip>;

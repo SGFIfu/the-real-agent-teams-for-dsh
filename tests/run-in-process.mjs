@@ -12,6 +12,8 @@ await import('../lib/core/concurrency.test.js');
 await import('../lib/core/dependencies.test.js');
 await import('../lib/core/messaging.test.js');
 await import('../lib/core/message-retry.test.js');
+await import('../lib/core/timer-cleanup.test.js');
+await import('../lib/core/member-state-machine.test.js');
 await import('../lib/core/reliability.test.js');
 await import('../lib/core/capabilities.test.js');
 await import('../lib/core/plans.test.js');
