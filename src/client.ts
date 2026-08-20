@@ -497,13 +497,14 @@ function CompactActivity(props: {
   readonly labels: UiLabels;
   readonly language: UiLanguage;
   readonly connection: 'connected' | 'reconnecting';
+  readonly recoveredEventsCount: number;
   readonly onOpen: (sessionId: string) => void;
   readonly onExpand: () => void;
   readonly onClose: () => void;
   readonly onLanguage: () => void;
   readonly onPreferences: () => void;
 }) : any {
-  const { snapshot, activity, labels, language, connection, onOpen, onExpand, onClose, onLanguage, onPreferences } = props;
+  const { snapshot, activity, labels, language, connection, recoveredEventsCount, onOpen, onExpand, onClose, onLanguage, onPreferences } = props;
   const done = snapshot.progress.requiredDone;
   const total = snapshot.progress.requiredTotal || snapshot.tasks.length;
   const ratio = Math.round(snapshot.progress.ratio * 100);
@@ -521,6 +522,14 @@ function CompactActivity(props: {
         React.createElement('small', null, language === 'zh-CN' ? '原生 Harness 专注模式' : 'Native Harness focus mode'),
       ),
       React.createElement('span', { className: `agc-compact-connection ${connection === 'reconnecting' ? 'reconnecting' : ''}` }, connection === 'connected' ? '● LIVE' : '↻ RECONNECTING'),
+      recoveredEventsCount > 0 && React.createElement('span', {
+        style: {
+          fontSize: '9px',
+          letterSpacing: '.06em',
+          color: '#3fb950',
+          marginLeft: '6px',
+        },
+      }, `↻ ${recoveredEventsCount}`),
       React.createElement('button', { className: 'agc-icon-btn', onClick: onLanguage, title: '中 / EN', 'aria-label': 'Toggle language' }, language === 'zh-CN' ? '中' : 'EN'),
       React.createElement('button', { className: 'agc-icon-btn', onClick: onPreferences, title: labels.customizeLabels, 'aria-label': labels.customizeLabels }, '⚙'),
       React.createElement('button', { className: 'agc-compact-close', onClick: onClose, title: labels.collapsePanel, 'aria-label': labels.collapsePanel }, '×'),
@@ -887,6 +896,7 @@ function WorkspaceLayout(props: {
   inspectorOpen: boolean;
   depFlash: Set<string>;
   connection: 'connected' | 'reconnecting';
+  recoveredEventsCount: number;
   activeTab: WorkspaceTab;
   submittedPlans: UiSnapshot['plans'];
   blockers: string[];
@@ -901,7 +911,7 @@ function WorkspaceLayout(props: {
   onLanguage: () => void;
   onPreferences: () => void;
 }): any {
-  const { snapshot, activity, labels, language, bridge, session, sessionId, inspectorOpen, depFlash, connection, activeTab, submittedPlans, blockers, openFindings, onTab, onSettings, onOpen, onActivity, onTask, onClose, onBack, onLanguage, onPreferences } = props;
+  const { snapshot, activity, labels, language, bridge, session, sessionId, inspectorOpen, depFlash, connection, recoveredEventsCount, activeTab, submittedPlans, blockers, openFindings, onTab, onSettings, onOpen, onActivity, onTask, onClose, onBack, onLanguage, onPreferences } = props;
   const memberName = (sid: string): string => snapshot.members.find((member) => member.sessionId === sid)?.name ?? sid.slice(0, 8);
   const overviewGrid = React.createElement('div', { className: 'agc-workspace-grid', 'data-active-tab': activeTab },
     React.createElement(TeamSummaryCard, { snapshot, labels }),
@@ -950,6 +960,15 @@ function WorkspaceLayout(props: {
       React.createElement('div', { className: 'agc-workspace-team-title' }, React.createElement('strong', null, snapshot.teamName), React.createElement('span', null, snapshot.teamGoal ?? labels.workspaceMode), React.createElement('span', { className: 'agc-team-chevron', 'aria-hidden': true }, '⌄')),
       React.createElement('div', { className: 'agc-workspace-head-actions' },
         React.createElement('span', { className: `agc-connection ${connection === 'reconnecting' ? 'reconnecting' : ''}` }, connection === 'connected' ? '● LIVE' : '↻ RECONNECTING…'),
+        recoveredEventsCount > 0 && React.createElement('span', {
+          style: {
+            fontSize: '10px',
+            letterSpacing: '.06em',
+            color: '#3fb950',
+            marginLeft: '8px',
+            animation: 'fadeIn 0.3s ease-in',
+          },
+        }, `↻ Recovered ${recoveredEventsCount} event${recoveredEventsCount > 1 ? 's' : ''}`),
         React.createElement('span', { className: 'agc-mode-pill', role: 'group', 'aria-label': labels.workspaceMode }, React.createElement('button', { type: 'button', 'data-on': false, onClick: onClose }, labels.focusMode), React.createElement('button', { type: 'button', 'data-on': true }, labels.workspaceMode)),
         React.createElement('button', { className: 'agc-icon-btn', onClick: onLanguage, title: '中 / EN', 'aria-label': 'Toggle language' }, language === 'zh-CN' ? '中' : 'EN'),
         React.createElement('button', { className: 'agc-icon-btn', onClick: onPreferences, title: labels.customizeLabels, 'aria-label': labels.customizeLabels }, '⚙'),
@@ -1151,7 +1170,9 @@ function CommandCenter(props: {
   const [session, setSession] = React.useState<SafeSessionSnapshot | undefined>(undefined);
   const [reduced, setReduced] = React.useState(() => prefersReducedMotion());
   const prevRef = React.useRef<UiSnapshot | undefined>(undefined);
+  const snapshotBeforeDisconnectRef = React.useRef<UiSnapshot | undefined>(undefined);
   const streamStateRef = React.useRef<'connected' | 'reconnecting'>('reconnecting');
+  const [recoveredEventsCount, setRecoveredEventsCount] = React.useState<number>(0);
   const leadSessionId = snapshot?.leadSessionId;
   const defaultPreviewSessionId = snapshot?.members.find((member) => ['working', 'reviewing', 'thinking'].includes(member.status))?.sessionId ?? leadSessionId ?? snapshot?.members[0]?.sessionId;
   const sessionTargetId = inspector ?? previewSessionId ?? defaultPreviewSessionId;
@@ -1210,18 +1231,44 @@ function CommandCenter(props: {
       retryAttempt = Math.min(retryAttempt + 1, 4);
       cancelRetry = timer.timeout(() => {
         void (async () => {
+          const beforeReconnect = snapshotBeforeDisconnectRef.current;
           await refresh(false);
           if (!alive) return;
+
+          // If we had a snapshot before disconnect, explicitly compute recovered events
+          if (beforeReconnect !== undefined && prevRef.current !== undefined) {
+            const recoveredEvents = diffSnapshots(beforeReconnect, prevRef.current, Date.now());
+            if (recoveredEvents.length > 0) {
+              // Filter out member-joined events as they're noisy on reconnect
+              const significantEvents = recoveredEvents.filter((e) => e.kind !== 'member-joined');
+              if (significantEvents.length > 0) {
+                setRecoveredEventsCount(significantEvents.length);
+                // Clear the notification after 3 seconds
+                timer.timeout(() => setRecoveredEventsCount(0), 3000);
+              }
+            }
+            snapshotBeforeDisconnectRef.current = undefined;
+          }
+
           off = bridge.subscribe(onFrame, onStreamState);
         })();
       }, delay);
     };
     const onStreamState = (state: 'connected' | 'reconnecting') => {
       if (!alive) return;
+      const wasConnected = streamStateRef.current === 'connected';
       streamStateRef.current = state;
       setConnection(state);
-      if (state === 'reconnecting') { off(); scheduleReconnect(); }
-      else retryAttempt = 0;
+      if (state === 'reconnecting') {
+        // Store current snapshot before disconnection for recovery
+        if (wasConnected && prevRef.current !== undefined) {
+          snapshotBeforeDisconnectRef.current = prevRef.current;
+        }
+        off();
+        scheduleReconnect();
+      } else {
+        retryAttempt = 0;
+      }
     };
     const onFrame = (frame: any) => {
       if (!alive) return;
@@ -1300,6 +1347,7 @@ function CommandCenter(props: {
         labels,
         language,
         connection,
+        recoveredEventsCount,
         onOpen: openInspector,
         onExpand: onExpand ?? (() => {}),
         onClose,
@@ -1323,6 +1371,7 @@ function CommandCenter(props: {
         inspectorOpen: inspector !== null,
         depFlash,
         connection,
+        recoveredEventsCount,
         activeTab: workspaceTab,
         submittedPlans,
         blockers,

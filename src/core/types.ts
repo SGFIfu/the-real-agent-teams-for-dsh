@@ -101,6 +101,8 @@ export interface TeamMember {
   eventCursor?: number;
   joinedAt: number;
   lastActiveAt: number;
+  /** Optimistic concurrency control version; incremented on every state update. */
+  version?: number;
 }
 
 // ── tasks ────────────────────────────────────────────────────────────────────

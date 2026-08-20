@@ -333,4 +333,243 @@ describe('Command Center web security boundary', () => {
     assert.equal(malformed.status, 400);
     assert.equal(responseCode(malformed), 'INVALID_INPUT');
   });
+
+  it('enforces principal-based authentication when authorizeCaller hook is provided', async () => {
+    const messages: Array<Record<string, unknown>> = [];
+    const route = commandRoute(
+      makeService(messages),
+      {
+        interrupt: () => undefined,
+        authorizeCaller: async (req, context) => {
+          // Simulate extracting principal from request headers (e.g., JWT token)
+          const authHeader = req.headers.authorization;
+          if (!authHeader || !authHeader.startsWith('Bearer ')) {
+            return undefined;
+          }
+          const token = authHeader.slice(7);
+          // Simulate token validation
+          if (token === 'alice_token') {
+            return { principalId: 'alice', teamIds: ['team_a'] };
+          }
+          if (token === 'bob_token') {
+            return { principalId: 'bob', teamIds: ['team_b'] };
+          }
+          if (token === 'admin_token') {
+            return { principalId: 'admin' }; // No teamIds restriction
+          }
+          return undefined;
+        },
+      },
+      new Set(),
+    );
+
+    const auth = await openBrowser(route);
+
+    // Test 1: No authorization header - should fail
+    const noAuth = await dispatch(route, {
+      method: 'POST',
+      url: '/agent-teams/team/team_a/message',
+      origin: 'http://127.0.0.1:3080',
+      fetchSite: 'same-origin',
+      headers: authenticatedHeaders(auth),
+      body: { body: 'no auth header' },
+    });
+    assert.equal(noAuth.status, 401);
+    assert.equal(responseCode(noAuth), 'WEB_CALLER_UNAUTHORIZED');
+
+    // Test 2: Invalid token - should fail
+    const invalidAuth = await dispatch(route, {
+      method: 'POST',
+      url: '/agent-teams/team/team_a/message',
+      origin: 'http://127.0.0.1:3080',
+      fetchSite: 'same-origin',
+      headers: {
+        ...authenticatedHeaders(auth),
+        authorization: 'Bearer invalid_token',
+      },
+      body: { body: 'invalid token' },
+    });
+    assert.equal(invalidAuth.status, 401);
+    assert.equal(responseCode(invalidAuth), 'WEB_CALLER_UNAUTHORIZED');
+
+    // Test 3: Valid user Alice accessing allowed team_a - should succeed
+    const aliceTeamA = await dispatch(route, {
+      method: 'POST',
+      url: '/agent-teams/team/team_a/message',
+      origin: 'http://127.0.0.1:3080',
+      fetchSite: 'same-origin',
+      headers: {
+        ...authenticatedHeaders(auth),
+        authorization: 'Bearer alice_token',
+      },
+      body: { body: 'alice to team_a' },
+    });
+    assert.equal(aliceTeamA.status, 200);
+    assert.equal(messages.length, 1);
+    assert.equal(messages[0]?.teamId, 'team_a');
+
+    // Test 4: Valid user Alice accessing forbidden team_b - should fail
+    const aliceTeamB = await dispatch(route, {
+      method: 'POST',
+      url: '/agent-teams/team/team_b/message',
+      origin: 'http://127.0.0.1:3080',
+      fetchSite: 'same-origin',
+      headers: {
+        ...authenticatedHeaders(auth),
+        authorization: 'Bearer alice_token',
+      },
+      body: { body: 'alice to team_b' },
+    });
+    assert.equal(aliceTeamB.status, 403);
+    assert.equal(responseCode(aliceTeamB), 'WEB_CALLER_FORBIDDEN');
+
+    // Test 5: Valid user Bob accessing allowed team_b - should succeed
+    const bobTeamB = await dispatch(route, {
+      method: 'POST',
+      url: '/agent-teams/team/team_b/message',
+      origin: 'http://127.0.0.1:3080',
+      fetchSite: 'same-origin',
+      headers: {
+        ...authenticatedHeaders(auth),
+        authorization: 'Bearer bob_token',
+      },
+      body: { body: 'bob to team_b' },
+    });
+    assert.equal(bobTeamB.status, 200);
+    assert.equal(messages.length, 2);
+    assert.equal(messages[1]?.teamId, 'team_b');
+
+    // Test 6: Admin with no team restrictions can access any team
+    const adminTeamA = await dispatch(route, {
+      method: 'POST',
+      url: '/agent-teams/team/team_a/message',
+      origin: 'http://127.0.0.1:3080',
+      fetchSite: 'same-origin',
+      headers: {
+        ...authenticatedHeaders(auth),
+        authorization: 'Bearer admin_token',
+      },
+      body: { body: 'admin to team_a' },
+    });
+    assert.equal(adminTeamA.status, 200);
+
+    const adminTeamB = await dispatch(route, {
+      method: 'POST',
+      url: '/agent-teams/team/team_b/message',
+      origin: 'http://127.0.0.1:3080',
+      fetchSite: 'same-origin',
+      headers: {
+        ...authenticatedHeaders(auth),
+        authorization: 'Bearer admin_token',
+      },
+      body: { body: 'admin to team_b' },
+    });
+    assert.equal(adminTeamB.status, 200);
+  });
+
+  it('logs authorization decisions for security auditing', async () => {
+    const authLog: Array<{ principalId: string; teamId: string; mutation: string; allowed: boolean }> = [];
+    const route = commandRoute(
+      makeService([]),
+      {
+        interrupt: () => undefined,
+        authorizeCaller: async (req, context) => {
+          const authHeader = req.headers.authorization;
+          if (!authHeader || !authHeader.startsWith('Bearer ')) {
+            authLog.push({ principalId: 'anonymous', teamId: context.teamId, mutation: context.mutation, allowed: false });
+            return undefined;
+          }
+          const token = authHeader.slice(7);
+          if (token === 'user_token') {
+            const caller = { principalId: 'user123', teamIds: ['team_a'] };
+            const allowed = !caller.teamIds || caller.teamIds.includes(context.teamId);
+            authLog.push({ principalId: caller.principalId, teamId: context.teamId, mutation: context.mutation, allowed });
+            return caller;
+          }
+          authLog.push({ principalId: 'invalid', teamId: context.teamId, mutation: context.mutation, allowed: false });
+          return undefined;
+        },
+      },
+      new Set(),
+    );
+
+    const auth = await openBrowser(route);
+
+    // Unauthorized access attempt
+    await dispatch(route, {
+      method: 'POST',
+      url: '/agent-teams/team/team_a/pause',
+      origin: 'http://127.0.0.1:3080',
+      fetchSite: 'same-origin',
+      headers: authenticatedHeaders(auth),
+      body: {},
+    });
+
+    // Authorized access
+    await dispatch(route, {
+      method: 'POST',
+      url: '/agent-teams/team/team_a/pause',
+      origin: 'http://127.0.0.1:3080',
+      fetchSite: 'same-origin',
+      headers: {
+        ...authenticatedHeaders(auth),
+        authorization: 'Bearer user_token',
+      },
+      body: {},
+    });
+
+    // Cross-team access attempt
+    await dispatch(route, {
+      method: 'POST',
+      url: '/agent-teams/team/team_b/pause',
+      origin: 'http://127.0.0.1:3080',
+      fetchSite: 'same-origin',
+      headers: {
+        ...authenticatedHeaders(auth),
+        authorization: 'Bearer user_token',
+      },
+      body: {},
+    });
+
+    // Verify all authorization attempts were logged
+    assert.equal(authLog.length, 3);
+    assert.equal(authLog[0]?.principalId, 'anonymous');
+    assert.equal(authLog[0]?.allowed, false);
+    assert.equal(authLog[1]?.principalId, 'user123');
+    assert.equal(authLog[1]?.teamId, 'team_a');
+    assert.equal(authLog[1]?.mutation, 'pause');
+    assert.equal(authLog[1]?.allowed, true);
+    assert.equal(authLog[2]?.principalId, 'user123');
+    assert.equal(authLog[2]?.teamId, 'team_b');
+    assert.equal(authLog[2]?.allowed, false);
+  });
+
+  it('handles authorizeCaller exceptions gracefully', async () => {
+    const route = commandRoute(
+      makeService([]),
+      {
+        interrupt: () => undefined,
+        authorizeCaller: async () => {
+          throw new Error('Authorization service unavailable');
+        },
+      },
+      new Set(),
+    );
+
+    const auth = await openBrowser(route);
+    const result = await dispatch(route, {
+      method: 'POST',
+      url: '/agent-teams/team/team_a/pause',
+      origin: 'http://127.0.0.1:3080',
+      fetchSite: 'same-origin',
+      headers: {
+        ...authenticatedHeaders(auth),
+        authorization: 'Bearer user_token',
+      },
+      body: {},
+    });
+
+    assert.equal(result.status, 401);
+    assert.equal(responseCode(result), 'WEB_CALLER_UNAUTHORIZED');
+  });
 });

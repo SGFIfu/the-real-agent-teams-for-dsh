@@ -24,19 +24,64 @@ export type CommandMutation =
   | 'complete';
 
 /**
- * Host-provided caller identity. The route never accepts this identity from a
- * request body or URL. `teamIds`, when supplied, is an allowlist owned by the
- * host caller-auth implementation.
+ * Host-provided caller identity for principal-based authentication.
+ *
+ * The route NEVER accepts this identity from a request body or URL parameter
+ * (that would be trivially spoofable). Instead, the host's `authorizeCaller`
+ * hook extracts and validates the principal identity from trusted request
+ * context (e.g., validated JWT token, session cookie verified against a
+ * principal service, mTLS client certificate).
+ *
+ * **Security properties**:
+ * - `principalId`: REQUIRED non-empty string identifying the authenticated user
+ * - `teamIds`: OPTIONAL allowlist of teams this principal can access
+ *   - When undefined/absent: principal can access ANY team (admin-level access)
+ *   - When defined: principal can ONLY access teams in this list
+ *
+ * **Example implementations**:
+ * ```typescript
+ * // JWT-based authentication with team claims
+ * authorizeCaller: async (req) => {
+ *   const token = extractJWT(req.headers.authorization);
+ *   const claims = await verifyJWT(token);
+ *   return {
+ *     principalId: claims.sub,
+ *     teamIds: claims.teams, // ['team_a', 'team_b']
+ *   };
+ * }
+ *
+ * // Session-based authentication with principal service lookup
+ * authorizeCaller: async (req) => {
+ *   const sessionId = req.headers.cookie;
+ *   const principal = await principalService.getPrincipal(sessionId);
+ *   const teams = await principalService.getTeamAccess(principal.id);
+ *   return {
+ *     principalId: principal.id,
+ *     teamIds: teams.map(t => t.id),
+ *   };
+ * }
+ * ```
  */
 export interface CommandCaller {
   principalId: string;
   teamIds?: readonly string[];
 }
 
+/**
+ * Context provided to the `authorizeCaller` hook for authorization decisions.
+ *
+ * This context allows the authorization hook to make informed access control
+ * decisions based on:
+ * - Which browser session is making the request (for session tracking)
+ * - Which team is being targeted (for team-based access control)
+ * - Which mutation is being attempted (for fine-grained permissions)
+ */
 export interface CommandCallerContext {
   /** The server-minted browser capability id, not a Harness session id. */
   browserSessionId: string;
+  /** The team being targeted by this mutation request. */
   teamId: string;
+  /** The specific mutation operation being attempted. */
   mutation: CommandMutation;
 }
 
@@ -44,10 +89,37 @@ export interface CommandRouteDeps {
   /** Interrupt one member session; caller supplies the lead handle. */
   interrupt(team: { leadSessionId: string }, sessionId: string): void;
   /**
-   * Optional Harness caller authorization hook. The current host WebServer
-   * exposes no principal service, so the route keeps a loopback browser
-   * capability fallback until the Lead wires this hook to an authenticated
-   * host caller context.
+   * **SECURITY CRITICAL**: Principal-based caller authorization hook.
+   *
+   * When provided, this hook MUST return a valid `CommandCaller` with a
+   * non-empty `principalId` for every authenticated request. The route
+   * will REJECT any request where this hook returns `undefined` or an
+   * invalid caller.
+   *
+   * **Multi-user environments**: This hook is MANDATORY for production
+   * deployments and shared development environments. Without it, the route
+   * falls back to a browser capability model that provides NO multi-user
+   * identity verification.
+   *
+   * **Single-user development**: The fallback browser capability is suitable
+   * ONLY for single-user localhost development where the loopback restriction
+   * provides sufficient isolation.
+   *
+   * **Implementation requirements**:
+   * 1. Extract principal identity from trusted request context (JWT, session, mTLS)
+   * 2. Validate the principal's authentication (verify token/session)
+   * 3. Return undefined for unauthenticated requests
+   * 4. Optionally provide `teamIds` allowlist for team-based access control
+   * 5. Throw errors for transient failures (DB down, etc.) - route will convert to 401
+   *
+   * **Access control semantics**:
+   * - `teamIds` undefined: Principal can access ANY team (admin/super-user)
+   * - `teamIds` defined: Principal can ONLY access teams in the allowlist
+   *
+   * @param req - The incoming HTTP request with headers/cookies for identity extraction
+   * @param context - The operation context (teamId, mutation, browserSessionId)
+   * @returns CommandCaller with principalId and optional teamIds, or undefined if not authenticated
+   * @throws Error for transient failures (will be converted to 401)
    */
   authorizeCaller?(
     req: IncomingMessage,
@@ -145,6 +217,26 @@ function loopbackHost(hostHeader: string | undefined): boolean {
   }
 }
 
+/**
+ * Check if the request originates from loopback and has same-origin headers.
+ *
+ * **SECURITY NOTE**: Loopback-only access is NOT sufficient for multi-user
+ * security. In shared development environments (containers, remote dev boxes,
+ * cloud workspaces), multiple users can access 127.0.0.1. Any process running
+ * under any user account on the same machine can make loopback requests.
+ *
+ * This check provides:
+ * ✓ Protection against remote network attacks
+ * ✓ Same-origin CSRF protection (via Origin/Referer headers)
+ *
+ * This check does NOT provide:
+ * ✗ Multi-user identity verification
+ * ✗ Protection against malicious local processes
+ * ✗ Team ownership verification
+ *
+ * For production or shared environments, the `authorizeCaller` hook MUST
+ * be provided to enable principal-based authentication.
+ */
 function sameOriginLoopback(req: IncomingMessage): boolean {
   if (!loopbackAddress(req.socket.remoteAddress) || !loopbackAddress(req.socket.localAddress)) return false;
   const host = header(req, 'host');
@@ -256,6 +348,32 @@ function bodyText(body: Record<string, unknown>, field: string, maxLength: numbe
   return value;
 }
 
+/**
+ * Authorize a mutation request using principal-based authentication or fallback
+ * browser capability. This function implements a defense-in-depth security model:
+ *
+ * **Principal-based authentication (preferred)**:
+ * When `authorizeCaller` hook is provided, it must return a valid `CommandCaller`
+ * with a non-empty `principalId`. If `teamIds` allowlist is provided, the target
+ * `teamId` must be in that list. This enables multi-user environments where
+ * different principals have access to different teams.
+ *
+ * **Browser capability fallback (compatibility)**:
+ * When `authorizeCaller` is undefined, the route uses a server-minted browser
+ * session capability that is intentionally scoped to ONE team. This prevents
+ * replay attacks (session for Team A cannot be used for Team B) but does NOT
+ * provide multi-user identity verification. This fallback is suitable ONLY for
+ * single-user development environments or when the host provides no principal
+ * service.
+ *
+ * **Security audit logging**:
+ * All authorization decisions are logged with principal identity (if available),
+ * target team, mutation type, and outcome for security monitoring.
+ *
+ * @throws {TeamError} WEB_CALLER_UNAUTHORIZED - No valid principal or capability
+ * @throws {TeamError} WEB_CALLER_FORBIDDEN - Principal lacks team access
+ * @throws {TeamError} CROSS_TEAM_TARGET - Browser capability bound to different team
+ */
 async function authorizeMutation(
   req: IncomingMessage,
   deps: CommandRouteDeps | undefined,
@@ -263,30 +381,80 @@ async function authorizeMutation(
   teamId: string,
   mutation: CommandMutation,
 ): Promise<void> {
+  // Principal-based authentication: verify caller identity and team access
   if (deps?.authorizeCaller !== undefined) {
     let caller: CommandCaller | undefined;
     try {
       caller = await deps.authorizeCaller(req, { browserSessionId: authenticated.id, teamId, mutation });
-    } catch {
+    } catch (error) {
+      // Log authorization hook failure for security monitoring
+      console.error('[command-route] authorizeCaller hook failed:', {
+        teamId,
+        mutation,
+        browserSessionId: authenticated.id,
+        error: String(error),
+      });
       throw teamError('WEB_CALLER_UNAUTHORIZED', 'Harness caller authorization failed');
     }
+
+    // Reject requests with no principal identity
     if (caller === undefined || typeof caller.principalId !== 'string' || caller.principalId.length === 0) {
+      console.warn('[command-route] Authorization rejected: no principal identity', {
+        teamId,
+        mutation,
+        browserSessionId: authenticated.id,
+      });
       throw teamError('WEB_CALLER_UNAUTHORIZED', 'Harness caller is not authenticated');
     }
+
+    // Enforce team access control when allowlist is provided
     if (caller.teamIds !== undefined && !caller.teamIds.includes(teamId)) {
+      console.warn('[command-route] Authorization rejected: principal not in team allowlist', {
+        principalId: caller.principalId,
+        requestedTeamId: teamId,
+        allowedTeamIds: caller.teamIds,
+        mutation,
+      });
       throw teamError('WEB_CALLER_FORBIDDEN', 'caller is not authorized for this team', { teamId });
     }
+
+    // Authorization successful
+    console.info('[command-route] Authorization granted', {
+      principalId: caller.principalId,
+      teamId,
+      mutation,
+      teamRestricted: caller.teamIds !== undefined,
+    });
     return;
   }
 
-  // Compatibility fallback for the current host: the browser capability is
-  // intentionally scoped to one Team. It prevents a session minted for Team
-  // A from being replayed against Team B, but is not a multi-user identity.
+  // COMPATIBILITY FALLBACK: Browser capability (not principal-based)
+  // This fallback is ONLY suitable for single-user development environments.
+  // In production or shared environments, authorizeCaller MUST be provided.
+  console.debug('[command-route] Using browser capability fallback (no authorizeCaller hook)', {
+    teamId,
+    mutation,
+    browserSessionId: authenticated.id,
+  });
+
+  // Bind the browser session to the first team it accesses
   if (authenticated.session.boundTeamId === undefined) {
     authenticated.session.boundTeamId = teamId;
+    console.debug('[command-route] Browser session bound to team', {
+      browserSessionId: authenticated.id,
+      teamId,
+    });
     return;
   }
+
+  // Reject cross-team access attempts with the same browser session
   if (authenticated.session.boundTeamId !== teamId) {
+    console.warn('[command-route] Cross-team access rejected', {
+      browserSessionId: authenticated.id,
+      requestedTeamId: teamId,
+      boundTeamId: authenticated.session.boundTeamId,
+      mutation,
+    });
     throw teamError('CROSS_TEAM_TARGET', 'browser caller is bound to a different team', {
       requestedTeamId: teamId,
       boundTeamId: authenticated.session.boundTeamId,

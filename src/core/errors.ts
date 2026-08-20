@@ -50,7 +50,8 @@ export type TeamErrorCode =
   | 'QA_EVIDENCE_INVALID'
   | 'WORKSPACE_NOT_FOUND'
   | 'WORKSPACE_OWNERSHIP_CONFLICT'
-  | 'WORKSPACE_PATH_ESCAPE';
+  | 'WORKSPACE_PATH_ESCAPE'
+  | 'CONCURRENT_MODIFICATION';
 
 export interface TeamErrorPayload {
   code: TeamErrorCode;
