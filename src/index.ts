@@ -22,6 +22,9 @@ import type { PromptSection } from '@deepseek-ai/dsh-system-prompt';
 import type { WebRoute } from '@deepseek-ai/dsh-host-webserver';
 import './harness/declare.ts';
 import { AgentTeamsService } from './core/service.ts';
+import { ReviewDomain } from './core/review.ts';
+import { createRuntimeEventLog } from './core/runtime-events.ts';
+import { WorkspaceManager } from './core/workspace.ts';
 import { MemoryStore, type TeamStore } from './core/store.ts';
 import { LEAD_APPENDIX, TEAM_PROTOCOL_CORE } from './core/prompts.ts';
 import { DomainStore } from './harness/domain-store.ts';
@@ -36,6 +39,7 @@ export const name = 'agent-teams';
 
 export interface Config {
   defaultProvider: string;
+  defaultModel?: string;
   maxActiveMembers: number;
   /** 'auto' opens the harness storage domain when mounted; 'memory' forces the in-memory store. */
   storageMode: 'auto' | 'memory';
@@ -43,6 +47,7 @@ export interface Config {
 
 export const Config: s<Config> = s.object({
   defaultProvider: s.string().default('spawn'),
+  defaultModel: s.string().default('deepseek-v4-flash'),
   maxActiveMembers: s.number().default(5),
   storageMode: s.union(['auto', 'memory']).default('auto'),
 });
@@ -125,11 +130,14 @@ export function apply(ctx: Context, config: Config): void {
     // Runtime: native subagent runtime when mounted; the service still works
     // for coordination when absent, and spawn fails loudly.
     const subagents = ctx.get('subagents') as SubagentRuntime | undefined;
-    const runtime = subagents === undefined ? undefined : new HarnessRuntimeAdapter({ ctx, subagents, defaultProvider: config.defaultProvider });
+    const runtime = subagents === undefined ? undefined : new HarnessRuntimeAdapter({ ctx, subagents, defaultProvider: config.defaultProvider, defaultModel: config.defaultModel });
 
     const service = new AgentTeamsService({
       store,
       runtime,
+      review: new ReviewDomain({ store }),
+      runtimeEvents: createRuntimeEventLog(store),
+      workspace: new WorkspaceManager({ store }),
       sink: new CordisEventSink(ctx),
       defaultProvider: config.defaultProvider,
       maxActiveMembers: config.maxActiveMembers,
@@ -149,6 +157,26 @@ export function apply(ctx: Context, config: Config): void {
     }
     disposers.push(...bridgeNativeEvents({ ctx, service }));
     console.log('[agent-teams] event bridge registered');
+
+    // Enforce the bounded capability policy at the Harness tool pipeline too.
+    // Team_* tools retain their own service-level authorization; this hook
+    // covers generic repo/process tools so a teammate's persisted capability
+    // record is an actual deny boundary rather than prompt-only metadata.
+    disposers.push(ctx.on('tools/pre-execute', async (execution, next) => {
+      const actor = execution.agent?.id;
+      if (actor === undefined) return next();
+      const decision = await service.authorizeToolCapability({
+        sessionId: actor,
+        toolName: execution.name,
+        arguments: execution.arguments,
+      });
+      if (decision.allowed) return next();
+      return {
+        kind: 'deny',
+        reason: `CAPABILITY_DENIED: ${decision.reason ?? 'capability policy rejected this tool call'}`,
+      };
+    }));
+    console.log('[agent-teams] capability guard registered');
 
     const systemPrompt = ctx.get('systemPrompt') as { section(section: PromptSection): () => void } | undefined;
     if (systemPrompt !== undefined) disposers.push(systemPrompt.section(promptSection()));

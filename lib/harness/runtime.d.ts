@@ -7,18 +7,26 @@
 import type { Context } from '@deepseek-ai/cordis';
 import type { SubagentRuntime } from '@deepseek-ai/dsh-subagent';
 import type { SpawnResult, SpawnSpec, TeamRuntimeAdapter } from '../core/types.ts';
+import { type ResolvedAgentSpec } from './provider-resolution.ts';
 export interface RuntimeDeps {
     ctx: Context;
     subagents?: SubagentRuntime;
     defaultProvider: string;
+    defaultModel?: string;
 }
 export declare class HarnessRuntimeAdapter implements TeamRuntimeAdapter {
     private readonly deps;
     constructor(deps: RuntimeDeps);
+    resolveAgentSpec(input: {
+        model?: string;
+        modelProvider?: string;
+        provider?: string;
+    }): ResolvedAgentSpec;
     private requireSubagents;
     startContinuable(spec: SpawnSpec): Promise<SpawnResult>;
     followup(parent: unknown, childId: string, text: string, senderSessionId?: string): Promise<void>;
     reportFrom(child: unknown, text: string): Promise<void>;
+    wakeWorker(parent: unknown, childId: string, text: string, senderSessionId?: string): Promise<void>;
     interrupt(targetSessionId: string, ancestor: unknown): void;
     listChildrenOf(parentSessionId: string): Promise<Array<{
         sessionId: string;

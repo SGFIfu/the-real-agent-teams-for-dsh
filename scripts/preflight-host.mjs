@@ -57,27 +57,29 @@ const fakeRes = {
   write(chunk) { sseWrites.push(chunk); return true; },
   end(chunk) { this.body += chunk ?? ''; },
 };
-const fakeReq = (url, method = 'GET') => ({
+const fakeReq = (url, method = 'GET', headers = {}) => ({
   url,
   method,
+  headers: { host: '127.0.0.1:3080', ...headers },
+  socket: { remoteAddress: '127.0.0.1', localAddress: '127.0.0.1' },
   listeners: {},
   on(event, cb) { this.listeners[event] = cb; return this; },
   emit(event, ...args) { if (this.listeners[event]) this.listeners[event](...args); return true; },
 });
 // For POST bodies: emit data/end on the next tick so readBody resolves.
-const postReq = (url, bodyObj) => {
-  const req = fakeReq(url, 'POST');
+const postReq = (url, bodyObj, headers = {}) => {
+  const req = fakeReq(url, 'POST', headers);
   const payload = JSON.stringify(bodyObj ?? {});
-  queueMicrotask(() => {
+  setTimeout(() => {
     req.emit('data', payload);
     req.emit('end');
-  });
+  }, 0);
   return req;
 };
 
 // apply
 const dispose = plugin.apply(ctx);
-assert.equal(registeredTools.length, 36, `expected 36 tools, got ${registeredTools.length}`);
+assert.equal(registeredTools.length, 47, `expected 47 tools, got ${registeredTools.length}`);
 const findTool = (name) => registeredTools.find((t) => t.name === name);
 assert.ok(findTool('team_create'));
 assert.ok(findTool('team_task_claim_next'));
@@ -110,14 +112,16 @@ assert.equal(claim.value.status, 'in_progress');
 // 3. web route: teams list
 fakeRes.body = ''; fakeRes.statusCode = 200;
 await routeCapture.handler(fakeReq('/agent-teams/teams'), fakeRes);
-assert.equal(fakeRes.statusCode, 200);
+assert.equal(fakeRes.statusCode, 200, fakeRes.body);
 const teams = JSON.parse(fakeRes.body);
 assert.equal(teams.length, 1);
 assert.equal(teams[0].id, teamId);
+const sessionCookie = String(fakeRes.headers['Set-Cookie'] ?? '').split(';')[0];
+const sessionCsrf = String(fakeRes.headers['X-Agent-Teams-CSRF'] ?? '');
 
 // 4. SSE stream: open, then a real event must push a frame
 fakeRes.body = ''; fakeRes.statusCode = 200;
-await routeCapture.handler(fakeReq('/agent-teams/stream'), fakeRes);
+await routeCapture.handler(fakeReq('/agent-teams/stream', 'GET', { cookie: sessionCookie }), fakeRes);
 assert.ok(sseWrites.length >= 1, 'stream greeting expected');
 const before = sseWrites.length;
 await findTool('team_task_complete').execute({ taskId: task.value.id, result: 'done' }, { agent: { id: 'lead-1' } });
@@ -135,9 +139,9 @@ assert.equal(snap.tasks[0].status, 'completed');
 
 // 6. POST message route (lead actor)
 fakeRes.body = ''; fakeRes.statusCode = 200;
-await routeCapture.handler(postReq(`/agent-teams/team/${teamId}/message`, { body: 'hi team' }), fakeRes);
+await routeCapture.handler(postReq(`/agent-teams/team/${teamId}/message`, { body: 'hi team' }, { cookie: sessionCookie, 'x-agent-teams-csrf': sessionCsrf }), fakeRes);
 assert.equal(fakeRes.statusCode, 200);
 assert.equal(JSON.parse(fakeRes.body).ok, true);
 
 dispose();
-console.log('preflight-host: ALL CHECKS PASSED (36 tools, routes, SSE push, actions)');
+console.log('preflight-host: ALL CHECKS PASSED (47 tools, routes, SSE push, actions)');

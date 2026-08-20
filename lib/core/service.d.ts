@@ -7,6 +7,11 @@
 import type { TeamStore } from './store.ts';
 import type { AgentTeam, FileClaim, ReviewFinding, ReviewSeverity, SessionId, TeamMember, TeamMessage, TeamMessageType, TeamPlan, TeamSnapshot, TeamTask, TaskPriority } from './types.ts';
 import type { TeamEventSink, TeamRuntimeAdapter } from './types.ts';
+import type { ReviewDomain } from './review.ts';
+import type { RuntimeEventLog } from './runtime-events.ts';
+import type { CreateFindingInput, CreateReviewRequestInput, ReviewSubmission } from './review.ts';
+import type { CreateWorkspaceInput, WorkspaceManager } from './workspace.ts';
+import { type ToolCapabilityDecision } from './capabilities.ts';
 export interface ServiceDeps {
     store: TeamStore;
     /** Optional harness runtime adapter; absent in no-model tests/simulation. */
@@ -17,6 +22,12 @@ export interface ServiceDeps {
     defaultProvider?: string;
     /** Cap on simultaneously registered members per team. */
     maxActiveMembers?: number;
+    /** Optional v2 review/QA domain; absent in legacy/no-model fixtures. */
+    review?: ReviewDomain;
+    /** Optional durable audit projection; live sink remains the UI notification path. */
+    runtimeEvents?: RuntimeEventLog;
+    /** Optional workspace/lease authority used by the production Harness instance. */
+    workspace?: WorkspaceManager;
 }
 export declare class AgentTeamsService {
     readonly store: TeamStore;
@@ -24,14 +35,46 @@ export declare class AgentTeamsService {
     readonly sink?: TeamEventSink;
     readonly defaultProvider: string;
     readonly maxActiveMembers: number;
+    readonly review?: ReviewDomain;
+    readonly runtimeEvents?: RuntimeEventLog;
+    readonly workspace?: WorkspaceManager;
     private readyFlag;
+    /** Serializes multi-record invariants within one plugin process. */
+    private readonly teamMutationQueues;
+    /** Coalesces duplicate wake-ups while a worker is being nudged. */
+    private readonly wakeKeys;
+    /** Bounded liveness retries for a wake that did not result in a claim. */
+    private readonly wakeAttempts;
+    private readonly wakeRetryTimers;
+    private static readonly MAX_WAKE_ATTEMPTS;
+    private static readonly WAKE_RETRY_DELAY_MS;
     constructor(deps: ServiceDeps);
     /** Resolve a team or fail with the typed error. */
     private team;
     private emit;
+    private appendRuntimeEvent;
     private assertActor;
+    /**
+     * Update a member with optimistic concurrency control.
+     * Rejects stale updates by checking the version field.
+     * @returns Updated member or undefined if version conflict detected
+     */
+    private updateMemberVersioned;
     private assertActive;
+    private requireLead;
+    private withTeamMutation;
     ready(): Promise<void>;
+    private requireWorkspaceManager;
+    private workspaceActor;
+    createWorkspace(input: Omit<CreateWorkspaceInput, 'sessionId'>, actor: SessionId): Promise<Awaited<ReturnType<WorkspaceManager['create']>>>;
+    listWorkspaces(teamId: string, actor: SessionId): Promise<Awaited<ReturnType<WorkspaceManager['list']>>>;
+    getWorkspace(workspaceId: string, teamId: string, actor: SessionId): Promise<Awaited<ReturnType<WorkspaceManager['get']>>>;
+    heartbeatWorkspace(workspaceId: string, teamId: string, actor: SessionId): Promise<Awaited<ReturnType<WorkspaceManager['heartbeat']>>>;
+    releaseWorkspace(workspaceId: string, teamId: string, actor: SessionId): Promise<Awaited<ReturnType<WorkspaceManager['releaseWorkspace']>>>;
+    handoffWorkspace(workspaceId: string, teamId: string, actor: SessionId, target: {
+        sessionId: SessionId;
+        memberId: string;
+    }): Promise<Awaited<ReturnType<WorkspaceManager['handoffWorkspace']>>>;
     createTeam(input: {
         name: string;
         goal: string;
@@ -39,6 +82,7 @@ export declare class AgentTeamsService {
         workspaceId: string;
     }): Promise<AgentTeam>;
     getTeam(teamId: string): Promise<AgentTeam>;
+    getTeamForActor(teamId: string, actor: SessionId): Promise<AgentTeam>;
     listTeams(actorSessionId?: SessionId): Promise<AgentTeam[]>;
     pauseTeam(teamId: string, actor: SessionId): Promise<AgentTeam>;
     resumeTeam(teamId: string, actor: SessionId): Promise<AgentTeam>;
@@ -55,10 +99,14 @@ export declare class AgentTeamsService {
         name: string;
         role: string;
         provider?: string;
+        modelProvider?: string;
         model?: string;
         capabilities?: string[];
         actor: SessionId;
     }): Promise<TeamMember>;
+    /** Bind the real Harness child identity after native spawn succeeds. */
+    bindMemberSession(memberId: string, childSessionId: SessionId, actor: SessionId): Promise<TeamMember>;
+    markMemberSpawnFailed(memberId: string, actor: SessionId): Promise<TeamMember>;
     getMember(memberId: string): Promise<TeamMember>;
     memberBySession(teamId: string, sessionId: SessionId): Promise<TeamMember | undefined>;
     listMembers(teamId: string, actor: SessionId): Promise<TeamMember[]>;
@@ -68,7 +116,29 @@ export declare class AgentTeamsService {
     private syncMemberTask;
     /** Native lifecycle bridge update; authorization is supplied by the host event source. */
     updateMemberFromRuntime(memberId: string, patch: Partial<Pick<TeamMember, 'status' | 'currentTaskId'>>): Promise<TeamMember>;
+    auditCapability(input: {
+        teamId: string;
+        sessionId: SessionId;
+        capability: string;
+        allowed: boolean;
+        command?: string;
+        workspace?: string;
+    }): Promise<void>;
+    /**
+     * Enforce the bounded capability policy at the host tool boundary.
+     *
+     * Team coordination tools keep their own typed authorization rules. This
+     * guard covers the host's repository/process tools when a real teammate is
+     * the caller, so a model cannot turn a descriptive capability record into an
+     * unrestricted shell or an unowned file write.
+     */
+    authorizeToolCapability(input: {
+        sessionId: SessionId;
+        toolName: string;
+        arguments: unknown;
+    }): Promise<ToolCapabilityDecision>;
     removeMember(memberId: string, actor: SessionId): Promise<void>;
+    assignTask(taskId: string, memberId: string, actor: SessionId): Promise<TeamTask>;
     createTask(input: {
         teamId: string;
         title: string;
@@ -77,6 +147,10 @@ export declare class AgentTeamsService {
         dependencies?: string[];
         requiresPlan?: boolean;
         required?: boolean;
+        assignedMemberId?: string;
+        assignedRole?: string;
+        requiredCapabilities?: string[];
+        workspaceId?: string;
         actor: SessionId;
     }): Promise<TeamTask>;
     createTasks(batch: Array<Omit<Parameters<AgentTeamsService['createTask']>[0], 'actor' | 'teamId'> & {
@@ -88,6 +162,26 @@ export declare class AgentTeamsService {
     private tasksOf;
     /** True when every dependency of the task is completed. */
     private dependenciesSatisfied;
+    private memberCanClaim;
+    private requireCapability;
+    private refreshReadyTasks;
+    private wakeKey;
+    private clearWakeRetry;
+    /**
+     * Cleans up all wake retry timers for a given team.
+     * Must be called when a team is paused, completed, failed, or when a member is removed.
+     */
+    private cleanupTeamTimers;
+    /**
+     * Cleans up all resources owned by a terminated member session.
+     * Must be called when a member status changes to 'failed' or 'stopped'.
+     */
+    private cleanupMemberResources;
+    private scheduleWakeRetry;
+    private notifyReadyWorkers;
+    /** Re-check authoritative state when a native worker becomes idle. */
+    retryReadyWorkers(teamId: string, sessionId: SessionId): Promise<void>;
+    private wakeEligibleWorkers;
     /** Cycle detection over the task graph of one team (DFS with colors). */
     addDependency(teamId: string, taskId: string, dependencyId: string, actor: SessionId): Promise<TeamTask>;
     claimTask(taskId: string, actor: SessionId): Promise<TeamTask>;
@@ -121,6 +215,9 @@ export declare class AgentTeamsService {
     releaseTask(taskId: string, actor: SessionId, reason?: string): Promise<TeamTask>;
     reassignTask(taskId: string, actor: SessionId, toSessionId: SessionId): Promise<TeamTask>;
     setTaskBlocked(taskId: string, actor: SessionId, reason?: string): Promise<TeamTask>;
+    private deliverMessageTarget;
+    private aggregateDelivery;
+    private tryMessageDelivery;
     sendMessage(input: {
         teamId: string;
         fromSessionId: SessionId;
@@ -128,6 +225,7 @@ export declare class AgentTeamsService {
         type?: TeamMessageType;
         body: string;
     }): Promise<TeamMessage>;
+    retryPendingMessages(teamId: string, targetSessionId?: SessionId): Promise<TeamMessage[]>;
     private leadHandleFor;
     private memberHandleFor;
     broadcastMessage(input: {
@@ -148,6 +246,19 @@ export declare class AgentTeamsService {
     rejectPlan(planId: string, actor: SessionId, feedback: string): Promise<TeamPlan>;
     private requirePlan;
     listPlans(teamId: string, actor: SessionId): Promise<TeamPlan[]>;
+    private requireReviewDomain;
+    createReviewRequest(input: Omit<CreateReviewRequestInput, 'requestedBy'> & {
+        requestedBy?: never;
+    }, actor: SessionId): Promise<import('./types.ts').ReviewRequest>;
+    startReview(requestId: string, actor: SessionId): Promise<import('./types.ts').ReviewRequest>;
+    submitReviewResult(input: Omit<Parameters<ReviewDomain['submitResult']>[0], 'reviewerSessionId'>, actor: SessionId): Promise<ReviewSubmission>;
+    createReviewFinding(input: Omit<CreateFindingInput, 'authorSessionId'>, actor: SessionId): Promise<ReviewFinding>;
+    resolveReviewFinding(findingId: string, resolutionEvidence: string, actor: SessionId): Promise<ReviewFinding>;
+    evaluateReviewGate(input: {
+        teamId: string;
+        taskId: string;
+        workspaceId: string;
+    }, actor: SessionId): Promise<import('./review.ts').ReviewGate>;
     private normalizePattern;
     /**
      * File ownership is the coordination boundary immediately before an agent
@@ -160,11 +271,19 @@ export declare class AgentTeamsService {
     claimFiles(input: {
         teamId: string;
         ownerSessionId: SessionId;
+        workspaceId?: string;
         patterns: string[];
         purpose: string;
     }): Promise<FileClaim[]>;
     releaseFiles(claimIds: string[], actor: SessionId): Promise<void>;
     listFileClaims(teamId: string, actor: SessionId): Promise<FileClaim[]>;
+    handoffFile(input: {
+        teamId: string;
+        claimId: string;
+        toSessionId: SessionId;
+        toMemberId?: string;
+        purpose?: string;
+    }, actor: SessionId): Promise<FileClaim>;
     addFinding(input: {
         teamId: string;
         authorSessionId: SessionId;

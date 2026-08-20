@@ -18,6 +18,7 @@ export interface UiMember {
 export interface UiTask {
     id: string;
     title: string;
+    description?: string;
     status: string;
     priority: string;
     ownerSessionId?: string;
@@ -57,6 +58,8 @@ export interface UiClaim {
 export interface UiSnapshot {
     teamId: string;
     teamName: string;
+    teamGoal?: string;
+    teamCreatedAt?: number;
     leadSessionId?: string;
     teamStatus: string;
     members: UiMember[];

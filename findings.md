@@ -240,3 +240,32 @@
 - The real Backend Inspector after restart showed `97 public events · open`, paired typed tool-call/tool-result rows, and no reasoning row inside the scoped Inspector. The host conversation still shows host-owned Think blocks and remains a system-level caveat.
 - Real completion POST after restart returned HTTP 400 with `code=TEAM_NOT_COMPLETABLE` and the persisted incomplete/in-progress/pending task IDs. Unauthenticated POST returned 401; a bogus stream cookie also returned 401.
 - No further real Agent continuation was fabricated: the remaining Task B/Reviewer/final-completion gates are still blocked by the external DeepSeek `Insufficient Balance` / `QUOTA` condition.
+
+## Agent Teams Runtime Upgrade v2 Audit (2026-08-16)
+
+### Repository baseline
+
+- Git branch: `agent/publish-experimental-v0-1-0`.
+- Worktree: clean before this upgrade audit.
+- Remote: `https://github.com/SGFIfu/the-real-agent-teams-for-dsh.git`.
+- HEAD: `d890ef3 publish experimental agent teams v0.1.0`.
+- `src/` contains `core`, `harness`, `tools`, `client.ts`, and client logic tests; there is no `src/workspace`, `src/git`, or `src/review` package boundary yet.
+- Existing docs already describe the service/store/runtime split in `docs/ARCHITECTURE.md`.
+
+### Baseline commands
+
+| Command | Result | Evidence |
+|---|---|---|
+| `npm run typecheck` | FAIL | Missing cached Harness type packages (`dsh-host-webserver`, `dsh-agent`, `dsh-subagent`, `dsh-session`, `dsh-tools`, `dsh-commands`, `dsh-system-prompt`) and consequent implicit-any/event-key errors |
+| `npm test` | PASS | 73/73 tests, 10 suites; includes concurrency, DAG, messaging, plans, file claims, persistence, simulation, privacy, and client bundle checks |
+| `npm run build` | FAIL | Same missing Harness type packages as typecheck; client build phase is not reached |
+| lint | NOT CONFIGURED | `package.json` has no lint script |
+| `rtk ls -la` | ERROR | Windows environment has no `ls`; subsequent tree audit used `rg --files` and PowerShell |
+
+### Architecture gaps against Runtime Upgrade v2
+
+- Existing `AgentTeamsService` is the single coordination core and already owns Team/Task/Message/Plan/FileClaim/Finding state. This is good and must be preserved.
+- Workspace/Git/Worktree/Commit/ReviewRequest/ReviewResult are not first-class domain records or service boundaries.
+- `docs/ARCHITECTURE.md` explicitly documents V1 member-to-member delivery as inbox plus lead relay; this conflicts with the v2 requirement for direct native Session delivery.
+- Event bridge and Web UI exist, but Runtime Upgrade v2 requires a durable auditable event contract covering branch/worktree/commit/review/QA and public visibility.
+- Existing worktree is a published release branch; an integration branch and isolated feature worktrees must be created before implementation.

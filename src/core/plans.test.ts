@@ -103,4 +103,73 @@ describe('plans', () => {
       return true;
     });
   });
+
+  it('plan approval is atomic: task and member state update together', async () => {
+    const { service, teamId } = await makeFixture([{ name: 'worker', role: 'backend', sessionId: S.backend }]);
+    const task = await service.createTask({
+      teamId,
+      title: 'atomic test',
+      description: 'verify atomicity of approval',
+      requiresPlan: true,
+      actor: S.lead,
+    });
+
+    // Claim task and submit plan
+    await service.claimTask(task.id, S.backend);
+    const plan = await service.submitPlan({
+      teamId,
+      taskId: task.id,
+      authorSessionId: S.backend,
+      body: 'test plan',
+    });
+
+    // Before approval: task is blocked, member is blocked
+    const blockedTask = await service.getTask(task.id, S.lead);
+    const blockedMember = (await service.listMembers(teamId, S.lead)).find((m) => m.sessionId === S.backend);
+    assert.equal(blockedTask.status, 'blocked');
+    assert.equal(blockedTask.ownerSessionId, S.backend);
+    assert.equal(blockedMember?.status, 'blocked');
+    assert.equal(blockedMember?.currentTaskId, task.id);
+
+    // Approve the plan
+    await service.approvePlan(plan.id, S.lead);
+
+    // After approval: task is released (pending, no owner), member is idle
+    const releasedTask = await service.getTask(task.id, S.lead);
+    const idleMember = (await service.listMembers(teamId, S.lead)).find((m) => m.sessionId === S.backend);
+    assert.equal(releasedTask.status, 'pending');
+    assert.equal(releasedTask.ownerSessionId, undefined, 'task owner should be cleared');
+    assert.equal(idleMember?.status, 'idle', 'member should be idle');
+    assert.equal(idleMember?.currentTaskId, undefined, 'member should have no current task');
+  });
+
+  it('plan rejection is atomic: task and member state update together', async () => {
+    const { service, teamId } = await makeFixture([{ name: 'worker', role: 'backend', sessionId: S.backend }]);
+    const task = await service.createTask({
+      teamId,
+      title: 'atomic reject test',
+      description: 'verify atomicity of rejection',
+      requiresPlan: true,
+      actor: S.lead,
+    });
+
+    await service.claimTask(task.id, S.backend);
+    const plan = await service.submitPlan({
+      teamId,
+      taskId: task.id,
+      authorSessionId: S.backend,
+      body: 'incomplete plan',
+    });
+
+    // Reject the plan
+    await service.rejectPlan(plan.id, S.lead, 'needs more detail');
+
+    // After rejection: task is released, member is idle
+    const releasedTask = await service.getTask(task.id, S.lead);
+    const idleMember = (await service.listMembers(teamId, S.lead)).find((m) => m.sessionId === S.backend);
+    assert.equal(releasedTask.status, 'pending');
+    assert.equal(releasedTask.ownerSessionId, undefined, 'task owner should be cleared');
+    assert.equal(idleMember?.status, 'idle', 'member should be idle');
+    assert.equal(idleMember?.currentTaskId, undefined, 'member should have no current task');
+  });
 });

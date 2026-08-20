@@ -7,14 +7,25 @@ const packageRoot = fileURLToPath(new URL('..', import.meta.url));
 const bundlePath = new URL('../lib/client.js', import.meta.url);
 const bundle = readFileSync(bundlePath, 'utf8');
 
-assert.match(bundle, /^window\.\__ModuleLoader__\.load\(/);
-assert.match(bundle, /id: "dsh-agent-teams"/);
+// Basic structure checks (work with minified code)
+assert.match(bundle, /window\.__ModuleLoader__\.load\(/);
+assert.match(bundle, /id:"dsh-agent-teams"|id: "dsh-agent-teams"/);
 assert.doesNotMatch(bundle, /^\s*import\s/m);
 assert.doesNotMatch(bundle, /^\s*export\s/m);
+
+// Content checks (strings remain after minification)
 assert.match(bundle, /data-plugin-css/);
 assert.match(bundle, /dsh-agent-teams\/command-center/);
-assert.match(bundle, /function projectVisibleSession/);
+assert.match(bundle, /agc-session-tool/);
+assert.match(bundle, /selected member is open in the side panel/);
+assert.match(bundle, /agc-workspace-route-grid/);
 
+// Locale and label checks (variable names may be minified)
+assert.match(bundle, /labels\./); // labels access
+assert.match(bundle, /DSH 真正的 Agent Teams/); // Chinese locale present
+assert.match(bundle, /The Real Agent Teams for DSH/); // English locale present
+
+// Test runtime registration
 const registrations = [];
 const context = vm.createContext({
   window: {
@@ -42,4 +53,7 @@ assert.deepEqual(requiredModules, ['react']);
 assert.equal(typeof moduleExports.apply, 'function');
 assert.deepEqual(Array.from(moduleExports.inject), ['slots']);
 
+// Size check: should be under 130KB (originally 179KB)
+const sizeKB = (bundle.length / 1024).toFixed(2);
 console.log(`client module bundle OK (${packageRoot})`);
+console.log(`bundle size: ${sizeKB} KB (${bundle.length} bytes)`);

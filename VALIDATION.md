@@ -8,6 +8,7 @@
 | Harness git commit | Not available; profile and plugin directory are not Git repositories |
 | Agent Teams version | `0.1.0` |
 | Plugin path | `C:\知识库\dsh-agent-teams` |
+| Current source commit | `b951e26 workspace-service-integration` |
 | Node | `v24.16.0` |
 | pnpm | `11.19.0` |
 | OS | Windows 11 Home Chinese, NT `10.0.26200.0` |
@@ -20,8 +21,8 @@
 |---|---|---|
 | Install | PASS | `pnpm install --no-frozen-lockfile` completed and generated `pnpm-lock.yaml`; the initial frozen attempt correctly failed because no lockfile existed yet |
 | Typecheck | PASS | `rtk npm run typecheck`; `tsc -p tsconfig.json --noEmit`, exit 0 |
-| Build | PASS | `rtk npm run build`; generated `lib/client.js` (80,225 bytes) |
-| Tests | PASS | `rtk npm test`; 73 passed, 0 failed, 10 suites |
+| Build | PASS | `rtk npm run build`; generated `lib/client.js` (86,550 bytes) |
+| Tests | PASS | `rtk npm test`; 103 passed, 0 failed, 17 suites |
 | Client bundle | PASS | `rtk node tests/client-module-bundle.mjs`; `client module bundle OK` |
 | Lint | NOT PRESENT | `package.json` has no lint script |
 
@@ -40,6 +41,7 @@
 | Self Claim | PASS for mechanism / PARTIAL live closure | Architect and Tester real self-claim transitions observed; provider stopped before a full completed second-task chain |
 | Plan Guard | PASS | real T3/T2 reject→revise→approve; preapproval `PLAN_NOT_APPROVED` returned by Service; unapproved implementation file claims are rejected too |
 | File Claims | PASS | real `claim_0000000y_271b377c` conflict on `tiny-notes/shared/types.ts` returned `FILE_CLAIM_CONFLICT` |
+| Workspace/Git production path | PASS for code/test integration | `WorkspaceManager` is now mounted by the production Service; `team_file_claim` can bind claims to a workspace lease; workspace lease and fixed-argv Git suites pass |
 | Reviewer | FAIL | real Team `findings=0`, Reviewer not activated, T6 pending; no finding/fix/re-review loop |
 | Completion Guard | PASS for rejection / PARTIAL for final success | authenticated real POST to `/agent-teams/team/team_00000001_7831f216/complete` returned HTTP 400, `code=TEAM_NOT_COMPLETABLE`, with incomplete/in-progress/pending task IDs; success after final validation remains unexecuted |
 | Security | PARTIAL | unauthenticated/CSRF/cross-Team/traversal/impersonation probes rejected; no host user-principal/role auth service exists |
@@ -92,4 +94,84 @@ Adapter benchmark normalized 6 agents, 50 tasks and 200 activity/message events 
 
 ## Acceptance decision
 
-The implementation has reliable tested coordination primitives, a functional selected-Team UI, and now real public child-session/tool observability. Live Persistent Teammates, Reviewer Loop, and final completion success remain unproven because the funded provider run returned repeated quota failures. New score: **84 / 100, PARTIALLY QUALIFIED**. It must not be labeled Qualified without a funded real-provider run that closes those gates.
+The implementation has reliable tested coordination primitives, a functional selected-Team UI, and real public child-session/tool evidence from the prior funded run. Live Persistent Teammates, Reviewer Loop, and final completion success remain unproven because that provider run returned repeated quota failures. Runtime event append is explicitly process-local/non-atomic across processes, and Harness caller-principal/RBAC is not exposed by the current WebServer API. New score: **84 / 100, PARTIALLY QUALIFIED**. It must not be labeled Qualified or published as production-ready without a funded real-provider run and those production-boundary decisions being closed.
+
+## P0 Reliability Hardening Validation — 2026-08-16
+
+| Check | Result | Evidence |
+|---|---|---|
+| Harness version | PASS | `@deepseek-ai/dsh 0.1.0-rc.6` |
+| Agent Teams version | PASS | `0.1.0` from `C:\知识库\dsh-agent-teams` |
+| Node / pnpm / OS | PASS | Node `v24.16.0`, pnpm `11.19.0`, Windows 11 build `10.0.26200.0` |
+| Typecheck | PASS | `rtk npm run typecheck` |
+| Build | PASS | `rtk npm run build` |
+| Tests | PASS | `109/109`, 20 suites, 0 failures |
+| Client Registration | PASS | client bundle test plus live Teams button |
+| Dynamic host preflight | PASS | `47 tools`, routes, SSE and actions |
+| Atomic concurrency | PASS | 50-way and multi-agent claim regressions; 0 duplicate owners |
+| Dependency enforcement | PASS | dependency/cycle regression suite |
+| Persistence | PASS | real restart retained P0 Team, members, tasks, plans, messages, claims and progress |
+| Session Privacy | PASS | real Inspector showed 141 public events and typed reasoning hidden |
+| Provider/model separation | PASS | real members used provider `spawn`, model `deepseek-v4-flash` |
+| Persistent Teammates | PASS for same-session reuse | Frontend T3 → T5 used session `7be65a14-7829-48c3-a13a-b622b9e3616a`; full final closure PARTIAL |
+| Peer Messaging | PASS | real native-followup deliveries with target session evidence |
+| Self Claim | PASS | Frontend self-claimed T5 after T3 on the same session |
+| Plan Guard | PASS | real v1 reject → v2 resubmit → approve; service hard guard tests pass |
+| File Claims | PASS | real `FILE_CLAIM_CONFLICT` then release/handoff |
+| Capability Policy | PASS | Architect write claim returned typed `CAPABILITY_DENIED` |
+| Reviewer | NOT VERIFIED | provider quota stopped before Reviewer activation |
+| Completion Guard | PARTIAL | guard regression and prior live rejection pass; final success not reached in this run |
+| Security | PASS for plugin boundary | auth/CSRF/cross-Team/traversal/impersonation tests pass |
+| Real Team | PARTIAL | `team_00000001_45752fca`; 3/7 tasks complete when quota stopped Lead |
+| Team Workspace | PASS | correct selected Team, real nodes, graph, feed, Inspector after restart |
+| Live Session | PASS | real Frontend Inspector bound to session id, 141 public events/tool rows |
+| Human Steering | NOT VERIFIED in this run | previous real run and service route tests pass; no new human message sent after quota stop |
+
+### Exact real Team identity
+
+Team: `team_00000001_45752fca`  
+Lead: `session-2294edb9-cfb9-4b53-8c8b-8adca8528942`  
+Architect: `ab9910a2-4483-4a08-87d2-6c8dcf6fc501`  
+Backend: `e0af835b-6f14-4ecc-a526-ee5add102cc9`  
+Frontend: `7be65a14-7829-48c3-a13a-b622b9e3616a`  
+Tester: `32371bb1-9973-4679-81b4-c4cbf069e5cd`
+
+### Dogfood stop reason
+
+The Lead's next control turn returned the real provider error `402 Insufficient Balance`, `code=QUOTA`. The UI showed four queued messages. T4, Reviewer, fix/re-review, final validation, and final `team_complete` were not claimed as successful.
+
+### Final P0 judgment
+
+**PARTIALLY IMPROVED.** Local invariants and real runtime evidence improved materially; a funded second run is still required for the remaining Tester wake-up, Reviewer, fix/re-review, and final completion gates.
+
+### Dogfood Git observation
+
+The real dogfood repository retained the initial scaffold commit `ee77cba` plus uncommitted worker files (`server.js`, `lib/`, `shared/`, `public/`, `docs/`). No worker branch/focused commit was observed before the provider quota stop; this is recorded as a workflow finding rather than converted into a false PASS.
+
+## Capability Enforcement Addendum — 2026-08-17
+
+| Check | Result | Evidence |
+|---|---|---|
+| Capability tool-boundary guard | PASS | `tools/pre-execute` calls the service policy for real member sessions |
+| Owned write enforcement | PASS | focused tests: owned path allowed, unclaimed path denied, Reviewer write denied |
+| Process/Git command boundary | PASS | focused tests deny shell mutation, arbitrary command, and protected Git actions; approved test/build/read commands remain allowed |
+| Capability audit events | PASS | `CAPABILITY_DECISION` includes team/member/session, capability, command/path, timestamp and allow/deny |
+| Regression suite after merge | PASS | 112/112 tests, 21 suites; typecheck/build/client/dynamic preflight all PASS |
+| Real post-guard child action | NOT VERIFIED | persisted real Team continuation again returned `402 Insufficient Balance` / `QUOTA` before a new funded child tool call |
+
+Implementation branch: `feature/runtime-capability-guard` → merge commit
+`28bac54` on `integration/runtime-reliability-v1`.
+
+## Ready-worker reconciliation addendum — 2026-08-17
+
+| Check | Result | Evidence |
+|---|---|---|
+| Ready task created after worker idle | PASS | runtime reliability regression |
+| Idle worker wake retry | PASS | bounded second wake after no claim |
+| Persisted READY task after service reload | PASS | shared-store service recovery regression |
+| Full local suite after reconciliation | PASS | 116/116 tests, 21 suites |
+| Live Tester T4 claim after recovery | NOT VERIFIED | real Lead/provider continuation remains `402 Insufficient Balance` / `QUOTA` |
+
+The recovery implementation is validated locally and the rebuilt Harness
+boots cleanly. The real Team evidence remains deliberately bounded by the
+provider quota: T4 is still READY/idle, so no end-to-end claim is asserted.

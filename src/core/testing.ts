@@ -36,7 +36,9 @@ export async function makeFixture(memberRoles: Array<{ name: string; role: strin
   const service = makeService(store);
   const team = await service.createTeam({ name: 'test-team', goal: 'ship the feature', leadSessionId: S.lead, workspaceId: 'ws-1' });
   for (const member of memberRoles) {
-    await service.registerMember({ teamId: team.id, sessionId: member.sessionId, name: member.name, role: member.role, actor: S.lead });
+    const registered = await service.registerMember({ teamId: team.id, sessionId: member.sessionId, name: member.name, role: member.role, actor: S.lead });
+    // Directly set member to 'idle' for testing (bypasses state machine for test convenience)
+    await service.updateMember(registered.id, S.lead, { status: 'idle' });
   }
   return { store, service, teamId: team.id };
 }
@@ -44,7 +46,21 @@ export async function makeFixture(memberRoles: Array<{ name: string; role: strin
 /** Dump every table into a plain object (used for restart-persistence tests). */
 export async function dumpStore(store: MemoryStore): Promise<Record<string, Record<string, unknown>>> {
   const dump: Record<string, Record<string, unknown>> = {};
-  for (const table of ['teams', 'members', 'tasks', 'messages', 'plans', 'file_claims', 'findings'] as const) {
+  for (const table of [
+    'teams',
+    'members',
+    'tasks',
+    'messages',
+    'plans',
+    'file_claims',
+    'findings',
+    'workspaces',
+    'git_workspaces',
+    'commits',
+    'review_requests',
+    'review_results',
+    'runtime_events',
+  ] as const) {
     const records = await store.list(table);
     dump[table] = Object.fromEntries(records.map((r) => [r.id, r]));
   }

@@ -8,17 +8,135 @@
  */
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
+import { isIP } from 'node:net';
 import type { WebRoute } from '@deepseek-ai/dsh-host-webserver';
+import { teamError, TeamError } from '../core/errors.ts';
 import type { AgentTeamsService } from '../core/service.ts';
+
+export type CommandMutation =
+  | 'message'
+  | 'plan-approve'
+  | 'plan-reject'
+  | 'interrupt'
+  | 'member-remove'
+  | 'pause'
+  | 'resume'
+  | 'complete';
+
+/**
+ * Host-provided caller identity for principal-based authentication.
+ *
+ * The route NEVER accepts this identity from a request body or URL parameter
+ * (that would be trivially spoofable). Instead, the host's `authorizeCaller`
+ * hook extracts and validates the principal identity from trusted request
+ * context (e.g., validated JWT token, session cookie verified against a
+ * principal service, mTLS client certificate).
+ *
+ * **Security properties**:
+ * - `principalId`: REQUIRED non-empty string identifying the authenticated user
+ * - `teamIds`: OPTIONAL allowlist of teams this principal can access
+ *   - When undefined/absent: principal can access ANY team (admin-level access)
+ *   - When defined: principal can ONLY access teams in this list
+ *
+ * **Example implementations**:
+ * ```typescript
+ * // JWT-based authentication with team claims
+ * authorizeCaller: async (req) => {
+ *   const token = extractJWT(req.headers.authorization);
+ *   const claims = await verifyJWT(token);
+ *   return {
+ *     principalId: claims.sub,
+ *     teamIds: claims.teams, // ['team_a', 'team_b']
+ *   };
+ * }
+ *
+ * // Session-based authentication with principal service lookup
+ * authorizeCaller: async (req) => {
+ *   const sessionId = req.headers.cookie;
+ *   const principal = await principalService.getPrincipal(sessionId);
+ *   const teams = await principalService.getTeamAccess(principal.id);
+ *   return {
+ *     principalId: principal.id,
+ *     teamIds: teams.map(t => t.id),
+ *   };
+ * }
+ * ```
+ */
+export interface CommandCaller {
+  principalId: string;
+  teamIds?: readonly string[];
+}
+
+/**
+ * Context provided to the `authorizeCaller` hook for authorization decisions.
+ *
+ * This context allows the authorization hook to make informed access control
+ * decisions based on:
+ * - Which browser session is making the request (for session tracking)
+ * - Which team is being targeted (for team-based access control)
+ * - Which mutation is being attempted (for fine-grained permissions)
+ */
+export interface CommandCallerContext {
+  /** The server-minted browser capability id, not a Harness session id. */
+  browserSessionId: string;
+  /** The team being targeted by this mutation request. */
+  teamId: string;
+  /** The specific mutation operation being attempted. */
+  mutation: CommandMutation;
+}
 
 export interface CommandRouteDeps {
   /** Interrupt one member session; caller supplies the lead handle. */
   interrupt(team: { leadSessionId: string }, sessionId: string): void;
+  /**
+   * **SECURITY CRITICAL**: Principal-based caller authorization hook.
+   *
+   * When provided, this hook MUST return a valid `CommandCaller` with a
+   * non-empty `principalId` for every authenticated request. The route
+   * will REJECT any request where this hook returns `undefined` or an
+   * invalid caller.
+   *
+   * **Multi-user environments**: This hook is MANDATORY for production
+   * deployments and shared development environments. Without it, the route
+   * falls back to a browser capability model that provides NO multi-user
+   * identity verification.
+   *
+   * **Single-user development**: The fallback browser capability is suitable
+   * ONLY for single-user localhost development where the loopback restriction
+   * provides sufficient isolation.
+   *
+   * **Implementation requirements**:
+   * 1. Extract principal identity from trusted request context (JWT, session, mTLS)
+   * 2. Validate the principal's authentication (verify token/session)
+   * 3. Return undefined for unauthenticated requests
+   * 4. Optionally provide `teamIds` allowlist for team-based access control
+   * 5. Throw errors for transient failures (DB down, etc.) - route will convert to 401
+   *
+   * **Access control semantics**:
+   * - `teamIds` undefined: Principal can access ANY team (admin/super-user)
+   * - `teamIds` defined: Principal can ONLY access teams in the allowlist
+   *
+   * @param req - The incoming HTTP request with headers/cookies for identity extraction
+   * @param context - The operation context (teamId, mutation, browserSessionId)
+   * @returns CommandCaller with principalId and optional teamIds, or undefined if not authenticated
+   * @throws Error for transient failures (will be converted to 401)
+   */
+  authorizeCaller?(
+    req: IncomingMessage,
+    context: CommandCallerContext,
+  ): CommandCaller | undefined | Promise<CommandCaller | undefined>;
 }
 
 interface WebSession {
   csrf: string;
   expiresAt: number;
+  /** Fallback capability is deliberately scoped to one Team. */
+  boundTeamId?: string;
+}
+
+interface AuthenticatedWebSession {
+  id: string;
+  session: WebSession;
 }
 
 const SESSION_COOKIE = 'dsh_agent_teams_session';
@@ -34,7 +152,13 @@ function cookie(req: IncomingMessage, name: string): string | undefined {
   const raw = req.headers.cookie ?? '';
   for (const part of raw.split(';')) {
     const [key, ...rest] = part.trim().split('=');
-    if (key === name) return decodeURIComponent(rest.join('='));
+    if (key === name) {
+      try {
+        return decodeURIComponent(rest.join('='));
+      } catch {
+        return undefined;
+      }
+    }
   }
   return undefined;
 }
@@ -49,46 +173,308 @@ function issueSession(req: IncomingMessage, res: ServerResponse, sessions: Map<s
   const id = randomBytes(24).toString('base64url');
   const session = { csrf: randomBytes(24).toString('base64url'), expiresAt: Date.now() + SESSION_TTL_MS };
   sessions.set(id, session);
-  res.setHeader('Set-Cookie', `${SESSION_COOKIE}=${encodeURIComponent(id)}; Path=/agent-teams; HttpOnly; SameSite=Strict`);
+  res.setHeader(
+    'Set-Cookie',
+    `${SESSION_COOKIE}=${encodeURIComponent(id)}; Path=/agent-teams; Max-Age=${Math.floor(SESSION_TTL_MS / 1000)}; HttpOnly; SameSite=Strict`,
+  );
+  res.setHeader('Cache-Control', 'no-store');
   res.setHeader('X-Agent-Teams-CSRF', session.csrf);
   return session;
 }
 
-function validSession(req: IncomingMessage, sessions: Map<string, WebSession>): WebSession | undefined {
+function validSession(req: IncomingMessage, sessions: Map<string, WebSession>): AuthenticatedWebSession | undefined {
   const id = cookie(req, SESSION_COOKIE);
   const session = id === undefined ? undefined : sessions.get(id);
-  return session === undefined || session.expiresAt <= Date.now() ? undefined : session;
+  if (id === undefined || session === undefined) return undefined;
+  if (session.expiresAt <= Date.now()) {
+    sessions.delete(id);
+    return undefined;
+  }
+  return { id, session };
 }
 
-function authenticatedMutation(req: IncomingMessage, sessions: Map<string, WebSession>): boolean {
-  const session = validSession(req, sessions);
-  if (session === undefined) return false;
+function header(req: IncomingMessage, name: string): string | undefined {
+  const value = req.headers[name];
+  return Array.isArray(value) ? value[0] : value;
+}
+
+function loopbackAddress(address: string | undefined): boolean {
+  if (address === undefined) return false;
+  if (address === '::1' || address === 'localhost') return true;
+  if (address.startsWith('::ffff:')) return loopbackAddress(address.slice('::ffff:'.length));
+  return isIP(address) === 4 && address.startsWith('127.');
+}
+
+function loopbackHost(hostHeader: string | undefined): boolean {
+  if (hostHeader === undefined || hostHeader.length === 0) return false;
+  try {
+    const parsed = new URL(`http://${hostHeader}`);
+    if (parsed.username !== '' || parsed.password !== '') return false;
+    const host = parsed.hostname.toLowerCase().replace(/^\[|\]$/g, '');
+    return host === 'localhost' || host === '::1' || (isIP(host) === 4 && host.startsWith('127.'));
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Check if the request originates from loopback and has same-origin headers.
+ *
+ * **SECURITY NOTE**: Loopback-only access is NOT sufficient for multi-user
+ * security. In shared development environments (containers, remote dev boxes,
+ * cloud workspaces), multiple users can access 127.0.0.1. Any process running
+ * under any user account on the same machine can make loopback requests.
+ *
+ * This check provides:
+ * ✓ Protection against remote network attacks
+ * ✓ Same-origin CSRF protection (via Origin/Referer headers)
+ *
+ * This check does NOT provide:
+ * ✗ Multi-user identity verification
+ * ✗ Protection against malicious local processes
+ * ✗ Team ownership verification
+ *
+ * For production or shared environments, the `authorizeCaller` hook MUST
+ * be provided to enable principal-based authentication.
+ */
+function sameOriginLoopback(req: IncomingMessage): boolean {
+  if (!loopbackAddress(req.socket.remoteAddress) || !loopbackAddress(req.socket.localAddress)) return false;
+  const host = header(req, 'host');
+  if (host !== undefined && !loopbackHost(host)) return false;
+
+  const origin = header(req, 'origin');
+  if (origin !== undefined) {
+    try {
+      const parsedOrigin = new URL(origin);
+      const expectedHost = host === undefined ? undefined : new URL(`http://${host}`).host;
+      if (parsedOrigin.protocol !== 'http:' && parsedOrigin.protocol !== 'https:') return false;
+      if (!loopbackHost(parsedOrigin.host) || (expectedHost !== undefined && parsedOrigin.host !== expectedHost)) return false;
+    } catch {
+      return false;
+    }
+  }
+
+  const fetchSite = header(req, 'sec-fetch-site');
+  if (fetchSite !== undefined && fetchSite !== 'same-origin' && fetchSite !== 'same-site') return false;
+  const referer = header(req, 'referer');
+  if (origin === undefined && referer !== undefined) {
+    try {
+      const parsedReferer = new URL(referer);
+      if (!loopbackHost(parsedReferer.host) || (host !== undefined && parsedReferer.host !== new URL(`http://${host}`).host)) return false;
+    } catch {
+      return false;
+    }
+  }
+  return true;
+}
+
+function authenticatedMutation(req: IncomingMessage, sessions: Map<string, WebSession>): AuthenticatedWebSession {
+  if (!sameOriginLoopback(req)) throw teamError('WEB_ORIGIN_FORBIDDEN', 'web caller must be a same-origin loopback request');
+  const authenticated = validSession(req, sessions);
+  if (authenticated === undefined) throw teamError('WEB_CALLER_UNAUTHORIZED', 'authenticated Harness browser session required');
   const provided = req.headers['x-agent-teams-csrf'];
   const csrf = Array.isArray(provided) ? provided[0] : provided;
-  if (csrf === undefined || csrf.length !== session.csrf.length) return false;
-  return timingSafeEqual(Buffer.from(csrf), Buffer.from(session.csrf));
+  if (csrf === undefined) throw teamError('WEB_CALLER_UNAUTHORIZED', 'authenticated Harness browser session required');
+  const providedBytes = Buffer.from(csrf);
+  const expectedBytes = Buffer.from(authenticated.session.csrf);
+  if (providedBytes.length !== expectedBytes.length || !timingSafeEqual(providedBytes, expectedBytes)) {
+    throw teamError('WEB_CALLER_UNAUTHORIZED', 'authenticated Harness browser session required');
+  }
+  return authenticated;
 }
 
 function safeId(raw: string): string {
-  const decoded = decodeURIComponent(raw);
-  if (decoded.includes('/') || decoded.includes('\\') || decoded.includes('..')) throw new Error('unsafe resource id');
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(raw);
+  } catch {
+    throw teamError('UNSAFE_RESOURCE_ID', 'resource id is not safely encoded');
+  }
+  if (!/^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(decoded)) {
+    throw teamError('UNSAFE_RESOURCE_ID', 'resource id is not safe for this route', { resourceId: raw });
+  }
   return decoded;
 }
 
+const MAX_BODY_BYTES = 64 * 1024;
+
 function readBody(req: IncomingMessage): Promise<Record<string, unknown>> {
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     let data = '';
+    let size = 0;
+    let rejected = false;
     req.on('data', (chunk) => {
-      data += chunk;
+      if (rejected) return;
+      const text = typeof chunk === 'string' ? chunk : Buffer.from(chunk as Uint8Array).toString('utf8');
+      size += Buffer.byteLength(text, 'utf8');
+      if (size > MAX_BODY_BYTES) {
+        rejected = true;
+        reject(teamError('INVALID_INPUT', 'request body exceeds the 64 KiB limit'));
+        return;
+      }
+      data += text;
+    });
+    req.on('error', (error) => {
+      if (!rejected) reject(teamError('INVALID_INPUT', `request body could not be read: ${String(error)}`));
     });
     req.on('end', () => {
+      if (rejected) return;
       try {
-        resolve(JSON.parse(data || '{}') as Record<string, unknown>);
+        const parsed: unknown = JSON.parse(data || '{}');
+        if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+          reject(teamError('INVALID_INPUT', 'request body must be a JSON object'));
+          return;
+        }
+        resolve(parsed as Record<string, unknown>);
       } catch {
-        resolve({});
+        reject(teamError('INVALID_INPUT', 'request body must be valid JSON'));
       }
     });
   });
+}
+
+function bodyId(body: Record<string, unknown>, field: string, required = true): string | undefined {
+  const value = body[field];
+  if (value === undefined && !required) return undefined;
+  if (typeof value !== 'string' || value.length === 0) throw teamError('INVALID_INPUT', `${field} must be a non-empty string`);
+  return safeId(value);
+}
+
+function bodyText(body: Record<string, unknown>, field: string, maxLength: number, required = true): string {
+  const value = body[field];
+  if (value === undefined && !required) return '';
+  if (typeof value !== 'string') throw teamError('INVALID_INPUT', `${field} must be a string`);
+  if (value.length > maxLength) throw teamError('INVALID_INPUT', `${field} exceeds the ${maxLength} character limit`);
+  return value;
+}
+
+/**
+ * Authorize a mutation request using principal-based authentication or fallback
+ * browser capability. This function implements a defense-in-depth security model:
+ *
+ * **Principal-based authentication (preferred)**:
+ * When `authorizeCaller` hook is provided, it must return a valid `CommandCaller`
+ * with a non-empty `principalId`. If `teamIds` allowlist is provided, the target
+ * `teamId` must be in that list. This enables multi-user environments where
+ * different principals have access to different teams.
+ *
+ * **Browser capability fallback (compatibility)**:
+ * When `authorizeCaller` is undefined, the route uses a server-minted browser
+ * session capability that is intentionally scoped to ONE team. This prevents
+ * replay attacks (session for Team A cannot be used for Team B) but does NOT
+ * provide multi-user identity verification. This fallback is suitable ONLY for
+ * single-user development environments or when the host provides no principal
+ * service.
+ *
+ * **Security audit logging**:
+ * All authorization decisions are logged with principal identity (if available),
+ * target team, mutation type, and outcome for security monitoring.
+ *
+ * @throws {TeamError} WEB_CALLER_UNAUTHORIZED - No valid principal or capability
+ * @throws {TeamError} WEB_CALLER_FORBIDDEN - Principal lacks team access
+ * @throws {TeamError} CROSS_TEAM_TARGET - Browser capability bound to different team
+ */
+async function authorizeMutation(
+  req: IncomingMessage,
+  deps: CommandRouteDeps | undefined,
+  authenticated: AuthenticatedWebSession,
+  teamId: string,
+  mutation: CommandMutation,
+): Promise<void> {
+  // Principal-based authentication: verify caller identity and team access
+  if (deps?.authorizeCaller !== undefined) {
+    let caller: CommandCaller | undefined;
+    try {
+      caller = await deps.authorizeCaller(req, { browserSessionId: authenticated.id, teamId, mutation });
+    } catch (error) {
+      // Log authorization hook failure for security monitoring
+      console.error('[command-route] authorizeCaller hook failed:', {
+        teamId,
+        mutation,
+        browserSessionId: authenticated.id,
+        error: String(error),
+      });
+      throw teamError('WEB_CALLER_UNAUTHORIZED', 'Harness caller authorization failed');
+    }
+
+    // Reject requests with no principal identity
+    if (caller === undefined || typeof caller.principalId !== 'string' || caller.principalId.length === 0) {
+      console.warn('[command-route] Authorization rejected: no principal identity', {
+        teamId,
+        mutation,
+        browserSessionId: authenticated.id,
+      });
+      throw teamError('WEB_CALLER_UNAUTHORIZED', 'Harness caller is not authenticated');
+    }
+
+    // Enforce team access control when allowlist is provided
+    if (caller.teamIds !== undefined && !caller.teamIds.includes(teamId)) {
+      console.warn('[command-route] Authorization rejected: principal not in team allowlist', {
+        principalId: caller.principalId,
+        requestedTeamId: teamId,
+        allowedTeamIds: caller.teamIds,
+        mutation,
+      });
+      throw teamError('WEB_CALLER_FORBIDDEN', 'caller is not authorized for this team', { teamId });
+    }
+
+    // Authorization successful
+    console.info('[command-route] Authorization granted', {
+      principalId: caller.principalId,
+      teamId,
+      mutation,
+      teamRestricted: caller.teamIds !== undefined,
+    });
+    return;
+  }
+
+  // COMPATIBILITY FALLBACK: Browser capability (not principal-based)
+  // This fallback is ONLY suitable for single-user development environments.
+  // In production or shared environments, authorizeCaller MUST be provided.
+  console.debug('[command-route] Using browser capability fallback (no authorizeCaller hook)', {
+    teamId,
+    mutation,
+    browserSessionId: authenticated.id,
+  });
+
+  // Bind the browser session to the first team it accesses
+  if (authenticated.session.boundTeamId === undefined) {
+    authenticated.session.boundTeamId = teamId;
+    console.debug('[command-route] Browser session bound to team', {
+      browserSessionId: authenticated.id,
+      teamId,
+    });
+    return;
+  }
+
+  // Reject cross-team access attempts with the same browser session
+  if (authenticated.session.boundTeamId !== teamId) {
+    console.warn('[command-route] Cross-team access rejected', {
+      browserSessionId: authenticated.id,
+      requestedTeamId: teamId,
+      boundTeamId: authenticated.session.boundTeamId,
+      mutation,
+    });
+    throw teamError('CROSS_TEAM_TARGET', 'browser caller is bound to a different team', {
+      requestedTeamId: teamId,
+      boundTeamId: authenticated.session.boundTeamId,
+    });
+  }
+}
+
+function errorStatus(error: unknown): number {
+  if (!(error instanceof TeamError)) return 400;
+  switch (error.code) {
+    case 'WEB_CALLER_UNAUTHORIZED':
+      return 401;
+    case 'WEB_CALLER_FORBIDDEN':
+    case 'WEB_ORIGIN_FORBIDDEN':
+    case 'CROSS_TEAM_TARGET':
+    case 'SESSION_NOT_IN_TEAM':
+      return 403;
+    default:
+      return 400;
+  }
 }
 
 export function commandRoute(service: AgentTeamsService, deps: CommandRouteDeps | undefined, sseClients: Set<ServerResponse>): WebRoute {
@@ -97,30 +483,34 @@ export function commandRoute(service: AgentTeamsService, deps: CommandRouteDeps 
     kind: 'prefix',
     path: '/agent-teams',
     handler: async (req: IncomingMessage, res: ServerResponse) => {
-      const url = (req.url ?? '').split('?')[0];
-      const segments = url.split('/').filter((p: string) => p.length > 0);
+      const pathname = new URL(req.url ?? '/', 'http://agent-teams.invalid').pathname;
+      const segments = pathname.split('/').filter((p: string) => p.length > 0);
       const after = segments.slice(1);
       const method = req.method ?? 'GET';
       try {
-        if (method === 'GET') issueSession(req, res, sessions);
-        if (method === 'POST' && !authenticatedMutation(req, sessions)) {
-          return json(res, 401, { error: 'authenticated Harness browser session required' });
+        if (!sameOriginLoopback(req)) {
+          return json(res, 403, { error: 'web caller must be a same-origin loopback request', code: 'WEB_ORIGIN_FORBIDDEN' });
         }
+        const authenticated = method === 'POST' ? authenticatedMutation(req, sessions) : undefined;
         // ── read endpoints ──────────────────────────────────────────────────
         if (method === 'GET') {
           if (after.length === 0 || (after.length === 1 && after[0] === 'teams')) {
+            issueSession(req, res, sessions);
             return json(res, 200, await service.listTeams());
           }
           if (after.length === 3 && after[0] === 'team' && after[2] === 'snapshot') {
+            issueSession(req, res, sessions);
             return json(res, 200, await service.publicSnapshot(safeId(after[1])));
           }
           if (after.length === 1 && after[0] === 'stream') {
             // SSE: push every typed agent-teams event as `data: <json>\n\n`.
+            if (!sameOriginLoopback(req) || validSession(req, sessions) === undefined) {
+              return json(res, 401, { error: 'authenticated Harness browser session required' });
+            }
             res.statusCode = 200;
             res.setHeader('Content-Type', 'text/event-stream');
             res.setHeader('Cache-Control', 'no-cache');
             res.setHeader('Connection', 'keep-alive');
-            if (validSession(req, sessions) === undefined) return json(res, 401, { error: 'authenticated Harness browser session required' });
             res.write(': agent-teams stream\n\n');
             sseClients.add(res);
             req.on('close', () => sseClients.delete(res));
@@ -132,13 +522,15 @@ export function commandRoute(service: AgentTeamsService, deps: CommandRouteDeps 
         if (method === 'POST') {
           if (after.length === 3 && after[0] === 'team' && after[2] === 'message') {
             const teamId = safeId(after[1]);
+            await authorizeMutation(req, deps, authenticated!, teamId, 'message');
             const body = await readBody(req);
             const team = await service.getTeam(teamId);
+            const toSessionId = bodyId(body, 'toSessionId', false);
             const message = await service.sendMessage({
               teamId,
               fromSessionId: team.leadSessionId,
-              toSessionId: typeof body.toSessionId === 'string' ? body.toSessionId : undefined,
-              body: String(body.body ?? ''),
+              toSessionId,
+              body: bodyText(body, 'body', 32_768),
             });
             return json(res, 200, { ok: true, messageId: message.id, message });
           }
@@ -149,40 +541,48 @@ export function commandRoute(service: AgentTeamsService, deps: CommandRouteDeps 
             const plans = await service.listPlans(teamId, team.leadSessionId);
             if (!plans.some((plan) => plan.id === planId)) return json(res, 403, { error: 'plan does not belong to team' });
             if (after[4] === 'approve') {
+              await authorizeMutation(req, deps, authenticated!, teamId, 'plan-approve');
               return json(res, 200, { ok: true, plan: await service.approvePlan(planId, team.leadSessionId) });
             }
             if (after[4] === 'reject') {
+              await authorizeMutation(req, deps, authenticated!, teamId, 'plan-reject');
               const body = await readBody(req);
-              return json(res, 200, { ok: true, plan: await service.rejectPlan(planId, team.leadSessionId, String(body.feedback ?? '')) });
+              return json(res, 200, { ok: true, plan: await service.rejectPlan(planId, team.leadSessionId, bodyText(body, 'feedback', 32_768, false)) });
             }
           }
           if (after.length === 3 && after[0] === 'team' && after[2] === 'interrupt') {
             const teamId = safeId(after[1]);
+            await authorizeMutation(req, deps, authenticated!, teamId, 'interrupt');
             const body = await readBody(req);
             if (deps === undefined) return json(res, 503, { error: 'subagent runtime not mounted' });
             const team = await service.getTeam(teamId);
-            const target = String(body.sessionId ?? '');
-            if (target !== team.leadSessionId && (await service.memberBySession(teamId, target)) === undefined) return json(res, 403, { error: 'target session is not a member of team' });
+            const target = bodyId(body, 'sessionId') as string;
+            if (target !== team.leadSessionId && (await service.memberBySession(teamId, target!)) === undefined) {
+              return json(res, 403, { error: 'target session is not a member of team', code: 'SESSION_NOT_IN_TEAM' });
+            }
             deps.interrupt(team, target);
             return json(res, 200, { ok: true });
           }
           if (after.length === 4 && after[0] === 'team' && after[2] === 'member' && after[3] === 'remove') {
             const teamId = safeId(after[1]);
+            await authorizeMutation(req, deps, authenticated!, teamId, 'member-remove');
             const body = await readBody(req);
             const team = await service.getTeam(teamId);
-            const member = await service.getMember(String(body.memberId ?? ''));
+            const member = await service.getMember(bodyId(body, 'memberId')!);
             if (member.teamId !== teamId) return json(res, 403, { error: 'member does not belong to team' });
             await service.removeMember(member.id, team.leadSessionId);
             return json(res, 200, { ok: true });
           }
           if (after.length === 3 && after[0] === 'team' && (after[2] === 'pause' || after[2] === 'resume')) {
             const teamId = safeId(after[1]);
+            await authorizeMutation(req, deps, authenticated!, teamId, after[2]);
             const team = await service.getTeam(teamId);
             const result = after[2] === 'pause' ? await service.pauseTeam(teamId, team.leadSessionId) : await service.resumeTeam(teamId, team.leadSessionId);
             return json(res, 200, { ok: true, team: result });
           }
           if (after.length === 3 && after[0] === 'team' && after[2] === 'complete') {
             const teamId = safeId(after[1]);
+            await authorizeMutation(req, deps, authenticated!, teamId, 'complete');
             const team = await service.getTeam(teamId);
             return json(res, 200, { ok: true, team: await service.completeTeam(teamId, team.leadSessionId) });
           }
@@ -191,7 +591,7 @@ export function commandRoute(service: AgentTeamsService, deps: CommandRouteDeps 
         return json(res, 404, { error: 'not found' });
       } catch (error) {
         const teamError = error as { code?: string; message?: string };
-        return json(res, 400, {
+        return json(res, errorStatus(error), {
           error: teamError.message ?? String(error),
           ...(teamError.code !== undefined ? { code: teamError.code } : {}),
           ...('details' in teamError && teamError.details !== undefined ? { details: teamError.details } : {}),

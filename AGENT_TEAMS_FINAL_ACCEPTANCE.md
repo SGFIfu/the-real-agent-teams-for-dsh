@@ -1,6 +1,6 @@
 # DeepSeek Harness Agent Teams — Final Acceptance
 
-Date: 2026-08-15
+Date: 2026-08-16
 Scope: remediation build, real Harness Web run, real Tiny Notes Team, service tests, UI inspection, security probes
 
 ## Executive Result
@@ -23,6 +23,7 @@ The remediation converted the previous first-Team/static-session problems into a
 | Harness git commit | Not available; profile and project are not Git repositories |
 | Plugin | `dsh-agent-teams@0.1.0` |
 | Plugin path | `C:\知识库\dsh-agent-teams` |
+| Git commit | `b951e26 workspace-service-integration` |
 | Node | `v24.16.0` |
 | pnpm | `11.19.0` |
 | OS | Windows 11 Home Chinese, NT `10.0.26200.0` |
@@ -35,8 +36,8 @@ The remediation converted the previous first-Team/static-session problems into a
 |---|---|---|
 | Install | **PASS** | `pnpm install --no-frozen-lockfile`; generated `pnpm-lock.yaml` |
 | Typecheck | **PASS** | `rtk npm run typecheck`, exit 0 |
-| Tests | **PASS** | `rtk npm test`: 73 passed, 0 failed, 10 suites |
-| Build | **PASS** | `rtk npm run build`; `lib/client.js` 80,225 bytes |
+| Tests | **PASS** | `rtk npm test`: 103 passed, 0 failed, 17 suites |
+| Build | **PASS** | `rtk npm run build`; `lib/client.js` 86,550 bytes |
 | Client build/registration | **PASS** | `rtk node tests/client-module-bundle.mjs`: classic registration bundle OK |
 | Lint | **NOT PRESENT** | no lint script in `package.json` |
 
@@ -67,7 +68,7 @@ Real artifacts include `C:\知识库\tiny-notes\docs\architecture.md`, `frontend
 |---|---|---|
 | Team formation | **PARTIAL** | 4 independent real teammate sessions; required Reviewer session was not created |
 | Persistent teammates | **FAIL** | same-session T1→T2 self-claim was observed, but no same-session completed Task A→Task B was completed |
-| Shared task board | **PASS** | real snapshot and 72-test suite agree on tasks, owners, dependencies and progress |
+| Shared task board | **PASS** | real snapshot and 103-test suite agree on tasks, owners, dependencies and progress |
 | Dependency enforcement | **PASS** | dependency and cycle tests; live blocked claims returned typed errors |
 | Atomic claiming | **PASS** | 50-way one-task, 50-way claimNext, and 4-agent/20-task runs produced zero duplicate owners |
 | Self claiming | **PARTIAL** | real Architect/Tester self-claim transitions plus simulation; live second-task closure stopped on quota |
@@ -129,7 +130,7 @@ The host Harness conversation itself still displays host-owned Think blocks. The
 |---|---|---|
 | Persistence | **PASS** | durable store round-trip and real reload/restart recovery |
 | Client module reliability | **PASS** | classic loader bundle and live registration |
-| Automated tests | **PASS for core / PARTIAL for E2E coverage** | 73 tests; no full browser E2E or funded real-provider regression suite |
+| Automated tests | **PASS for core / PARTIAL for E2E coverage** | 103 tests; no full browser E2E or funded real-provider regression suite |
 | Architecture | **GOOD** | Service, storage, runtime, tools, route and client logic boundaries are explicit |
 | Security/error handling | **PARTIAL** | unauthenticated/CSRF/cross-Team/traversal/impersonation probes rejected; no full Harness caller-principal/role service |
 
@@ -164,11 +165,13 @@ None observed in the repaired plugin invariants. C12 is fixed in the Agent Teams
 1. A funded real-provider run is required: external `QUOTA` failures prevented Reviewer activation, persistent Task B completion, and final validation success.
 2. Web capability authentication does not identify a Harness user principal or enforce role-based permissions.
 3. The real Team remains active with T2/T5 in progress and T6 pending; final acceptance cannot be inferred from the successful rejection guard.
+4. Runtime event append advertises `crossProcessSafe: false` on the default TeamStore and is an asynchronous audit projection rather than a mutation-atomic outbox.
 
 ### P2 Medium
 
 1. Real-time flying message/status animation could not be observed reliably during a completed peer-work transition.
 2. No browser-level automated tests cover theme, mobile, reduced motion, refresh animation replay, or Inspector live updates.
+3. Workspace/Git production wiring is now present, but cross-process lease atomicity and a full live workspace/review cycle remain unverified.
 
 ### P3 Low
 
@@ -194,3 +197,39 @@ None observed in the repaired plugin invariants. C12 is fixed in the Agent Teams
 ## Final Verdict
 
 dsh-agent-teams is now a genuine coordination implementation with real Team state, independent sessions, atomic claims, dependency enforcement, native peer delivery, file conflicts, plan guards, persistence, and a selected-Team UI. The real Inspector now exposes the selected child’s typed public assistant/tool trajectory without hidden reasoning. It is still not a Qualified release because the real provider stopped before persistent work closure, Reviewer/fix/re-review, and final completion success; it remains **PARTIALLY QUALIFIED**, not a decorative multi-subagent shell.
+
+## P0 Reliability Hardening Addendum — 2026-08-16
+
+Latest Team: `team_00000001_45752fca`. Four real DeepSeek V4 Flash child sessions using native `spawn` proved provider/model separation, plan reject/revise/approve, native peer delivery, real file conflict/handoff, and Frontend T3 → same-session T5 self-claim. A real Harness restart preserved the Team, members, tasks, plans, messages, claims and progress; the UI reopened the correct Team and privacy-safe Inspector.
+
+The next Lead control turn returned the real provider error `402 Insufficient Balance` / `QUOTA`. Tester T4, independent Reviewer, fix/re-review, final validation and final completion were not executed. The latest release judgment is **PARTIALLY IMPROVED**, not QUALIFIED. Full evidence is in `HARNESS_RUNTIME_RELIABILITY_IMPROVEMENT_REPORT.md`.
+
+## P0 Capability Enforcement Addendum — 2026-08-17
+
+The repaired branch now installs a `tools/pre-execute` capability guard for
+real teammate sessions. Local evidence: 112/112 tests pass across 21 suites;
+owned/unowned writes, Reviewer verification versus mutation, arbitrary shell,
+shell file mutation, and protected Git actions are covered. Typecheck, build,
+client registration, dynamic host preflight, and the rebuilt Harness boot all
+pass. Merge commit: `28bac54`.
+
+This is not a new real-agent PASS: the persisted P0 Dogfood Team's next
+continuation still returned the real Provider error `402 Insufficient Balance`
+(`QUOTA`). Tester, Reviewer/fix/re-review, final validation, and successful
+`team_complete` remain unexecuted. The acceptance status therefore remains
+**PARTIALLY IMPROVED / NOT QUALIFIED**.
+
+## P0 Ready-worker Reconciliation Addendum — 2026-08-17
+
+The runtime now reconciles persisted and newly-created READY work when an
+eligible teammate is idle, after native child binding, and during service
+startup. Wake requests use bounded retry state and are cleared on claim or
+delivery failure. Local regressions cover task-creation wake, idle retry,
+persisted READY work after reload, role routing, and atomic claim safety.
+
+Validation is **116/116 tests PASS**, typecheck/build/client/dynamic preflight
+PASS, and the rebuilt Harness booted with no new plugin errors. The live P0
+Team still has Tester T4 READY/idle; its next real control turn is blocked by
+`402 Insufficient Balance` / `QUOTA`. Therefore the real Tester claim,
+Reviewer loop, final validation, and successful team completion remain
+unverified. Judgment remains **PARTIALLY IMPROVED / NOT QUALIFIED**.

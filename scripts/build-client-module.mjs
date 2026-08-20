@@ -1,11 +1,13 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { minify } from 'terser';
 
 const packageRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 const clientPath = join(packageRoot, 'lib', 'client.js');
 const logicPath = join(packageRoot, 'lib', 'client', 'logic', 'control.js');
 const sessionLogicPath = join(packageRoot, 'lib', 'client', 'logic', 'session.js');
+const localeLogicPath = join(packageRoot, 'lib', 'client', 'logic', 'locale.js');
 
 /**
  * Turn a tsc-emitted ESM module into the body of the Harness client factory.
@@ -24,6 +26,7 @@ function stripModuleSyntax(source) {
 
 const logic = stripModuleSyntax(readFileSync(logicPath, 'utf8'));
 const sessionLogic = stripModuleSyntax(readFileSync(sessionLogicPath, 'utf8'));
+const localeLogic = stripModuleSyntax(readFileSync(localeLogicPath, 'utf8'));
 const client = stripModuleSyntax(readFileSync(clientPath, 'utf8'));
 
 const bundle = [
@@ -38,6 +41,7 @@ const bundle = [
   '    var React = require("react");',
   logic,
   sessionLogic,
+  localeLogic,
   client,
   '    exports.apply = apply;',
   '    exports.inject = inject;',
@@ -47,5 +51,37 @@ const bundle = [
   '',
 ].join('\n');
 
-writeFileSync(clientPath, bundle, 'utf8');
-console.log(`built ${clientPath} (${bundle.length} bytes)`);
+const originalSize = bundle.length;
+console.log(`Bundle built: ${originalSize} bytes (${(originalSize / 1024).toFixed(2)} KB)`);
+
+// Minify the bundle
+console.log('Minifying...');
+const result = await minify(bundle, {
+  compress: {
+    dead_code: true,
+    drop_console: false,
+    drop_debugger: true,
+    passes: 2,
+  },
+  mangle: {
+    toplevel: false,
+    reserved: ['React', 'require', 'module', 'exports', 'apply', 'inject'],
+  },
+  format: {
+    comments: false,
+  },
+});
+
+if (!result.code) {
+  console.error('Minification failed');
+  process.exit(1);
+}
+
+const minifiedSize = result.code.length;
+const savings = originalSize - minifiedSize;
+const savingsPercent = (savings / originalSize * 100).toFixed(1);
+
+writeFileSync(clientPath, result.code, 'utf8');
+console.log(`Minified: ${minifiedSize} bytes (${(minifiedSize / 1024).toFixed(2)} KB)`);
+console.log(`Savings: ${savings} bytes (${(savings / 1024).toFixed(2)} KB, ${savingsPercent}%)`);
+console.log(`built ${clientPath}`);

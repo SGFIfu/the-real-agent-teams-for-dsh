@@ -182,7 +182,7 @@ export function registerTeamTools(deps: ToolsDeps): Array<() => void> {
   );
 
   register(
-    defineTool(deps, 'team_status', 'Read one team (id, goal, lead, status).', params({ teamId: stringProp('Team id') }, ['teamId']), (args, actor, s) => s.getTeam(args.teamId)),
+    defineTool(deps, 'team_status', 'Read one team (id, goal, lead, status).', params({ teamId: stringProp('Team id') }, ['teamId']), (args, actor, s) => s.getTeamForActor(args.teamId, actor)),
   );
 
   register(
@@ -218,7 +218,10 @@ export function registerTeamTools(deps: ToolsDeps): Array<() => void> {
           teamId: stringProp('Team id'),
           role: stringProp('Role, e.g. backend, frontend, tester, reviewer, architect'),
           name: optionalStringProp('Display name (defaults to role)'),
-          provider: optionalStringProp('Subagent provider (default: team default)'),
+          provider: optionalStringProp('Native subagent runtime provider, e.g. spawn'),
+          modelProvider: optionalStringProp('Model provider passed to the child AgentOptions'),
+          model: optionalStringProp('Model alias or model id, e.g. v4-flash or deepseek-v4-flash'),
+          capabilities: arrayOfStrings('Optional bounded capability set; omitted uses the role policy'),
           taskId: optionalStringProp('Initial task id to assign (optional)'),
         },
         ['teamId', 'role'],
@@ -229,25 +232,24 @@ export function registerTeamTools(deps: ToolsDeps): Array<() => void> {
         const runtime = s.runtime;
         if (runtime === undefined) throw new TeamError('SUBAGENT_UNAVAILABLE', 'subagent runtime not mounted in this process');
         const initialTask: TeamTask | undefined = args.taskId === undefined ? undefined : await s.getTask(args.taskId, actor);
-        // Unique placeholder identity; the harness assigns the real session id
-        // once the continuable child is established (concurrent spawns safe).
-        const placeholderSessionId = `__pending_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
-        const member = await s.registerMember({ teamId: args.teamId, sessionId: placeholderSessionId, name, role: args.role, provider: args.provider, actor });
+        const resolved = runtime.resolveAgentSpec?.({ model: args.model, modelProvider: args.modelProvider, provider: args.provider });
+        const provider = resolved?.resolvedProvider ?? args.provider ?? s.defaultProvider;
+        const model = resolved?.resolvedModel ?? args.model;
+        const spawn = await runtime.startContinuable({
+          provider,
+          modelProvider: resolved?.resolvedModelProvider ?? args.modelProvider,
+          model,
+          label: name,
+          promptText: teammatePrompt({ team, role: args.role, name, initialTask }),
+          parent: leadHandle(team.leadSessionId),
+          signal: exec.signal,
+        });
         try {
-          const spawn = await runtime.startContinuable({
-            provider: args.provider ?? s.defaultProvider,
-            label: name,
-            promptText: teammatePrompt({ team, role: args.role, name, initialTask }),
-            parent: leadHandle(team.leadSessionId),
-            // The tool-call cancellation signal: the spawn observes it without
-            // creating an AbortController global (works in confined sandboxes).
-            signal: exec.signal,
-          });
-          // The harness owns the real session identity: rewrite the placeholder.
-          await s.store.put('members', member.id, { ...member, sessionId: spawn.childId, status: 'idle' });
-          return { memberId: member.id, sessionId: spawn.childId, messageId: spawn.messageId };
+          const member = await s.registerMember({ teamId: args.teamId, sessionId: spawn.childId, name, role: args.role, provider, modelProvider: resolved?.resolvedModelProvider ?? args.modelProvider, model, capabilities: args.capabilities, actor });
+          if (args.taskId !== undefined) await s.assignTask(args.taskId, member.id, actor);
+          return { memberId: member.id, sessionId: spawn.childId, messageId: spawn.messageId, model, provider, capabilities: member.capabilities };
         } catch (error) {
-          await s.store.put('members', member.id, { ...member, status: 'failed' });
+          try { runtime.interrupt(spawn.childId, leadHandle(team.leadSessionId)); } catch { }
           throw error;
         }
       },
@@ -265,10 +267,13 @@ export function registerTeamTools(deps: ToolsDeps): Array<() => void> {
           sessionId: stringProp('Real harness session id of the member'),
           name: stringProp('Display name'),
           role: stringProp('Role'),
+          modelProvider: optionalStringProp('Model provider'),
+          model: optionalStringProp('Model id or alias'),
+          capabilities: arrayOfStrings('Optional bounded capability set'),
         },
         ['teamId', 'sessionId', 'name', 'role'],
       ),
-      (args, actor, s) => s.registerMember({ teamId: args.teamId, sessionId: args.sessionId, name: args.name, role: args.role, actor }),
+      (args, actor, s) => s.registerMember({ teamId: args.teamId, sessionId: args.sessionId, name: args.name, role: args.role, modelProvider: args.modelProvider, model: args.model, capabilities: args.capabilities, actor }),
     ),
   );
 
@@ -304,6 +309,10 @@ export function registerTeamTools(deps: ToolsDeps): Array<() => void> {
           dependencies: arrayOfStrings('Task ids that must complete first'),
           requiresPlan: { type: 'boolean', description: 'Task needs an approved plan before implementation' },
           required: { type: 'boolean', description: 'Counts toward team completion (default true)' },
+          assignedMemberId: optionalStringProp('Explicit teammate member id'),
+          assignedRole: optionalStringProp('Explicit teammate role'),
+          requiredCapabilities: arrayOfStrings('Capabilities required to claim this task'),
+          workspaceId: optionalStringProp('Workspace lease id'),
         },
         ['teamId', 'title', 'description'],
       ),
@@ -316,6 +325,10 @@ export function registerTeamTools(deps: ToolsDeps): Array<() => void> {
           dependencies: args.dependencies,
           requiresPlan: args.requiresPlan,
           required: args.required,
+          assignedMemberId: args.assignedMemberId,
+          assignedRole: args.assignedRole,
+          requiredCapabilities: args.requiredCapabilities,
+          workspaceId: args.workspaceId,
           actor,
         }),
     ),
@@ -461,6 +474,103 @@ export function registerTeamTools(deps: ToolsDeps): Array<() => void> {
     defineTool(deps, 'team_plan_list', 'List plans for a team.', params({ teamId: stringProp('Team id') }, ['teamId']), (args, actor, s) => s.listPlans(args.teamId, actor)),
   );
 
+  register(
+    defineTool(
+      deps,
+      'team_review_request',
+      'Request an independent teammate review for a task workspace.',
+      params({ teamId: stringProp('Team id'), taskId: stringProp('Task id'), workspaceId: stringProp('Workspace id'), reviewerMemberId: stringProp('Independent reviewer member id'), baseRef: stringProp('Base Git ref'), headRef: stringProp('Head Git ref') }, ['teamId', 'taskId', 'workspaceId', 'reviewerMemberId', 'baseRef', 'headRef']),
+      (args, actor, s) => s.createReviewRequest({ teamId: args.teamId, taskId: args.taskId, workspaceId: args.workspaceId, reviewerMemberId: args.reviewerMemberId, baseRef: args.baseRef, headRef: args.headRef }, actor),
+    ),
+  );
+
+  register(
+    defineTool(deps, 'team_review_start', 'Start a review as the assigned independent reviewer.', params({ requestId: stringProp('Review request id') }, ['requestId']), (args, actor, s) => s.startReview(args.requestId, actor)),
+  );
+
+  register(
+    defineTool(
+      deps,
+      'team_review_finding',
+      'Record a structured review finding linked to one task workspace and responsible fixer.',
+      params({ teamId: stringProp('Team id'), taskId: stringProp('Task id'), workspaceId: stringProp('Workspace id'), responsibleMemberId: stringProp('Responsible fixer member id'), severity: { type: 'string', enum: ['critical', 'high', 'medium', 'low'] }, title: stringProp('Finding title'), description: stringProp('Finding description'), evidence: stringProp('Concrete diff/test evidence') }, ['teamId', 'taskId', 'workspaceId', 'responsibleMemberId', 'severity', 'title', 'description', 'evidence']),
+      (args, actor, s) => s.createReviewFinding({ teamId: args.teamId, taskId: args.taskId, workspaceId: args.workspaceId, responsibleMemberId: args.responsibleMemberId, severity: args.severity, title: args.title, description: args.description, evidence: args.evidence }, actor),
+    ),
+  );
+
+  register(
+    defineTool(deps, 'team_review_resolve_finding', 'Resolve a finding after the responsible teammate fixes it and records evidence.', params({ findingId: stringProp('Finding id'), resolutionEvidence: stringProp('Test or diff evidence for the fix') }, ['findingId', 'resolutionEvidence']), (args, actor, s) => s.resolveReviewFinding(args.findingId, args.resolutionEvidence, actor)),
+  );
+
+  register(
+    defineTool(
+      deps,
+      'team_review_submit',
+      'Submit the assigned reviewer verdict with structured QA evidence. Approval is rejected while medium/high/critical findings remain unresolved.',
+      params(
+        {
+          requestId: stringProp('Review request id'),
+          verdict: { type: 'string', enum: ['approved', 'changes_requested', 'rejected'] },
+          findingIds: arrayOfStrings('Finding ids reviewed'),
+          evidence: {
+            type: 'array',
+            items: nestedObject(
+              {
+                id: stringProp('Evidence id'),
+                kind: { type: 'string', enum: ['test', 'manual', 'tool', 'artifact', 'runtime'] },
+                outcome: { type: 'string', enum: ['passed', 'failed', 'observed'] },
+                summary: stringProp('Evidence summary'),
+                source: stringProp('Evidence source'),
+                recordedBySessionId: stringProp('Session that recorded evidence'),
+                verifiedBySessionId: stringProp('Assigned reviewer session'),
+                verifiedAt: { type: 'number' },
+              },
+              ['id', 'kind', 'outcome', 'summary', 'source', 'recordedBySessionId', 'verifiedBySessionId', 'verifiedAt'],
+            ),
+          },
+        },
+        ['requestId', 'verdict', 'evidence'],
+      ),
+      (args, actor, s) => s.submitReviewResult({ requestId: args.requestId, verdict: args.verdict, findingIds: args.findingIds, evidence: args.evidence }, actor),
+    ),
+  );
+
+  // ── workspaces and leases ────────────────────────────────────────────────
+  register(
+    defineTool(
+      deps,
+      'team_workspace_create',
+      'Create a durable, session-bound Git workspace lease for implementation work.',
+      params(
+        {
+          teamId: stringProp('Team id'),
+          taskId: optionalStringProp('Optional task id bound to the workspace'),
+          repositoryRoot: stringProp('Approved absolute repository root'),
+          branch: stringProp('Safe Git branch name'),
+          worktreePath: stringProp('Approved absolute worktree path'),
+        },
+        ['teamId', 'repositoryRoot', 'branch', 'worktreePath'],
+      ),
+      (args, actor, s) => s.createWorkspace({ teamId: args.teamId, taskId: args.taskId, repositoryRoot: args.repositoryRoot, branch: args.branch, worktreePath: args.worktreePath }, actor),
+    ),
+  );
+
+  register(
+    defineTool(deps, 'team_workspace_list', 'List durable workspaces visible to the calling Team member.', params({ teamId: stringProp('Team id') }, ['teamId']), (args, actor, s) => s.listWorkspaces(args.teamId, actor)),
+  );
+
+  register(
+    defineTool(deps, 'team_workspace_get', 'Read one session-bound workspace lease.', params({ teamId: stringProp('Team id'), workspaceId: stringProp('Workspace id') }, ['teamId', 'workspaceId']), (args, actor, s) => s.getWorkspace(args.workspaceId, args.teamId, actor)),
+  );
+
+  register(
+    defineTool(deps, 'team_workspace_heartbeat', 'Renew the calling member workspace lease.', params({ teamId: stringProp('Team id'), workspaceId: stringProp('Workspace id') }, ['teamId', 'workspaceId']), (args, actor, s) => s.heartbeatWorkspace(args.workspaceId, args.teamId, actor)),
+  );
+
+  register(
+    defineTool(deps, 'team_workspace_release', 'Release the calling member workspace lease.', params({ teamId: stringProp('Team id'), workspaceId: stringProp('Workspace id') }, ['teamId', 'workspaceId']), (args, actor, s) => s.releaseWorkspace(args.workspaceId, args.teamId, actor)),
+  );
+
   // ── file claims ────────────────────────────────────────────────────────────
   register(
     defineTool(
@@ -470,12 +580,13 @@ export function registerTeamTools(deps: ToolsDeps): Array<() => void> {
       params(
         {
           teamId: stringProp('Team id'),
+          workspaceId: optionalStringProp('Optional workspace lease id'),
           patterns: arrayOfStrings('Paths: src/a.ts (file), src/ (directory), src/server/** (glob)'),
           purpose: stringProp('Why the claim is needed'),
         },
         ['teamId', 'patterns', 'purpose'],
       ),
-      (args, actor, s) => s.claimFiles({ teamId: args.teamId, ownerSessionId: actor, patterns: args.patterns, purpose: args.purpose }),
+      (args, actor, s) => s.claimFiles({ teamId: args.teamId, ownerSessionId: actor, workspaceId: args.workspaceId, patterns: args.patterns, purpose: args.purpose }),
     ),
   );
 
@@ -485,6 +596,16 @@ export function registerTeamTools(deps: ToolsDeps): Array<() => void> {
 
   register(
     defineTool(deps, 'team_file_claims', 'List all file claims in the team.', params({ teamId: stringProp('Team id') }, ['teamId']), (args, actor, s) => s.listFileClaims(args.teamId, actor)),
+  );
+
+  register(
+    defineTool(
+      deps,
+      'team_file_handoff',
+      'Hand off an owned file lease to another real Team member after coordination.',
+      params({ teamId: stringProp('Team id'), claimId: stringProp('File claim id'), toSessionId: stringProp('Target member session id'), toMemberId: optionalStringProp('Target member id'), purpose: optionalStringProp('Updated ownership purpose') }, ['teamId', 'claimId', 'toSessionId']),
+      (args, actor, s) => s.handoffFile({ teamId: args.teamId, claimId: args.claimId, toSessionId: args.toSessionId, toMemberId: args.toMemberId, purpose: args.purpose }, actor),
+    ),
   );
 
   // ── review findings ────────────────────────────────────────────────────────

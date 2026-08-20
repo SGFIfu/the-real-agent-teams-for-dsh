@@ -37,10 +37,27 @@ export declare const memberSchema: z.ZodObject<{
         starting: "starting";
         stopped: "stopped";
     }>;
+    lifecycleState: z.ZodOptional<z.ZodEnum<{
+        working: "working";
+        blocked: "blocked";
+        failed: "failed";
+        starting: "starting";
+        stopped: "stopped";
+        ready: "ready";
+        waiting_for_task: "waiting_for_task";
+        claiming: "claiming";
+        reporting: "reporting";
+        waiting_for_review: "waiting_for_review";
+        cancelled: "cancelled";
+    }>>;
     currentTaskId: z.ZodOptional<z.ZodString>;
     provider: z.ZodOptional<z.ZodString>;
+    modelProvider: z.ZodOptional<z.ZodString>;
     model: z.ZodOptional<z.ZodString>;
     capabilities: z.ZodOptional<z.ZodArray<z.ZodString>>;
+    workspaceId: z.ZodOptional<z.ZodString>;
+    eventCursor: z.ZodOptional<z.ZodNumber>;
+    version: z.ZodOptional<z.ZodNumber>;
     joinedAt: z.ZodNumber;
     lastActiveAt: z.ZodNumber;
 }, z.core.$strip>;
@@ -63,7 +80,15 @@ export declare const taskSchema: z.ZodObject<{
         normal: "normal";
         low: "low";
     }>;
+    availability: z.ZodOptional<z.ZodEnum<{
+        ready: "ready";
+        locked: "locked";
+    }>>;
     ownerSessionId: z.ZodOptional<z.ZodString>;
+    assignedMemberId: z.ZodOptional<z.ZodString>;
+    assignedRole: z.ZodOptional<z.ZodString>;
+    requiredCapabilities: z.ZodOptional<z.ZodArray<z.ZodString>>;
+    workspaceId: z.ZodOptional<z.ZodString>;
     dependencies: z.ZodArray<z.ZodString>;
     requiresPlan: z.ZodBoolean;
     required: z.ZodBoolean;
@@ -79,10 +104,10 @@ export declare const messageSchema: z.ZodObject<{
     toSessionId: z.ZodOptional<z.ZodString>;
     type: z.ZodEnum<{
         message: "message";
-        plan: "plan";
-        question: "question";
         result: "result";
+        plan: "plan";
         warning: "warning";
+        question: "question";
         handoff: "handoff";
         review: "review";
         shutdown: "shutdown";
@@ -92,13 +117,30 @@ export declare const messageSchema: z.ZodObject<{
     deliveryState: z.ZodOptional<z.ZodEnum<{
         failed: "failed";
         pending: "pending";
+        queued: "queued";
+        delivering: "delivering";
         delivered: "delivered";
+        acknowledged: "acknowledged";
     }>>;
     deliveryTransport: z.ZodOptional<z.ZodEnum<{
         "native-followup": "native-followup";
         "native-report": "native-report";
         "durable-inbox": "durable-inbox";
     }>>;
+    deliveryAttempt: z.ZodOptional<z.ZodNumber>;
+    deliveryTargets: z.ZodOptional<z.ZodRecord<z.ZodString, z.ZodObject<{
+        state: z.ZodEnum<{
+            failed: "failed";
+            pending: "pending";
+            queued: "queued";
+            delivering: "delivering";
+            delivered: "delivered";
+            acknowledged: "acknowledged";
+        }>;
+        attempts: z.ZodNumber;
+        deliveredAt: z.ZodOptional<z.ZodNumber>;
+        error: z.ZodOptional<z.ZodString>;
+    }, z.core.$strip>>>;
     deliveredAt: z.ZodOptional<z.ZodNumber>;
     deliveryError: z.ZodOptional<z.ZodString>;
 }, z.core.$strip>;
@@ -156,6 +198,122 @@ export declare const findingSchema: z.ZodObject<{
     createdAt: z.ZodNumber;
     resolvedAt: z.ZodOptional<z.ZodNumber>;
 }, z.core.$strip>;
+export declare const workspaceSchema: z.ZodObject<{
+    id: z.ZodString;
+    teamId: z.ZodString;
+    memberId: z.ZodOptional<z.ZodString>;
+    taskId: z.ZodOptional<z.ZodString>;
+    repositoryRoot: z.ZodString;
+    branch: z.ZodString;
+    worktreePath: z.ZodString;
+    status: z.ZodEnum<{
+        ready: "ready";
+        review: "review";
+        requested: "requested";
+        creating: "creating";
+        dirty: "dirty";
+        clean: "clean";
+        merged: "merged";
+        abandoned: "abandoned";
+        recoverable: "recoverable";
+    }>;
+    leaseId: z.ZodString;
+    createdAt: z.ZodNumber;
+    updatedAt: z.ZodNumber;
+    lastHeartbeatAt: z.ZodNumber;
+}, z.core.$strip>;
+export declare const gitWorkspaceSchema: z.ZodObject<{
+    id: z.ZodString;
+    workspaceId: z.ZodString;
+    repositoryRoot: z.ZodString;
+    branch: z.ZodString;
+    baseRef: z.ZodString;
+    worktreePath: z.ZodString;
+    head: z.ZodOptional<z.ZodString>;
+    changedFiles: z.ZodArray<z.ZodString>;
+    status: z.ZodEnum<{
+        ready: "ready";
+        creating: "creating";
+        dirty: "dirty";
+        clean: "clean";
+        merged: "merged";
+        abandoned: "abandoned";
+        recoverable: "recoverable";
+    }>;
+    createdAt: z.ZodNumber;
+    updatedAt: z.ZodNumber;
+}, z.core.$strip>;
+export declare const workspaceCommitSchema: z.ZodObject<{
+    id: z.ZodString;
+    teamId: z.ZodString;
+    workspaceId: z.ZodString;
+    memberId: z.ZodString;
+    taskId: z.ZodOptional<z.ZodString>;
+    hash: z.ZodString;
+    subject: z.ZodString;
+    files: z.ZodArray<z.ZodString>;
+    createdAt: z.ZodNumber;
+}, z.core.$strip>;
+/** Compatibility alias for callers that refer to the table as commits. */
+export declare const commitSchema: z.ZodObject<{
+    id: z.ZodString;
+    teamId: z.ZodString;
+    workspaceId: z.ZodString;
+    memberId: z.ZodString;
+    taskId: z.ZodOptional<z.ZodString>;
+    hash: z.ZodString;
+    subject: z.ZodString;
+    files: z.ZodArray<z.ZodString>;
+    createdAt: z.ZodNumber;
+}, z.core.$strip>;
+export declare const reviewRequestSchema: z.ZodObject<{
+    id: z.ZodString;
+    teamId: z.ZodString;
+    taskId: z.ZodString;
+    workspaceId: z.ZodString;
+    requestedBy: z.ZodString;
+    reviewerMemberId: z.ZodString;
+    baseRef: z.ZodString;
+    headRef: z.ZodString;
+    status: z.ZodEnum<{
+        approved: "approved";
+        rejected: "rejected";
+        requested: "requested";
+        in_review: "in_review";
+        changes_requested: "changes_requested";
+    }>;
+    createdAt: z.ZodNumber;
+    updatedAt: z.ZodNumber;
+}, z.core.$strip>;
+export declare const reviewResultSchema: z.ZodObject<{
+    id: z.ZodString;
+    requestId: z.ZodString;
+    reviewerMemberId: z.ZodString;
+    verdict: z.ZodEnum<{
+        approved: "approved";
+        rejected: "rejected";
+        changes_requested: "changes_requested";
+    }>;
+    evidence: z.ZodArray<z.ZodString>;
+    findingIds: z.ZodArray<z.ZodString>;
+    createdAt: z.ZodNumber;
+}, z.core.$strip>;
+export declare const runtimeEventSchema: z.ZodObject<{
+    id: z.ZodString;
+    teamId: z.ZodString;
+    sequence: z.ZodNumber;
+    name: z.ZodString;
+    actorSessionId: z.ZodOptional<z.ZodString>;
+    targetSessionId: z.ZodOptional<z.ZodString>;
+    visibility: z.ZodEnum<{
+        public: "public";
+        internal: "internal";
+    }>;
+    payloadVersion: z.ZodLiteral<1>;
+    dedupeKey: z.ZodOptional<z.ZodString>;
+    payload: z.ZodRecord<z.ZodString, z.ZodUnknown>;
+    createdAt: z.ZodNumber;
+}, z.core.$strip>;
 export declare const domainSchema: {
     readonly teams: z.ZodObject<{
         id: z.ZodString;
@@ -187,10 +345,27 @@ export declare const domainSchema: {
             starting: "starting";
             stopped: "stopped";
         }>;
+        lifecycleState: z.ZodOptional<z.ZodEnum<{
+            working: "working";
+            blocked: "blocked";
+            failed: "failed";
+            starting: "starting";
+            stopped: "stopped";
+            ready: "ready";
+            waiting_for_task: "waiting_for_task";
+            claiming: "claiming";
+            reporting: "reporting";
+            waiting_for_review: "waiting_for_review";
+            cancelled: "cancelled";
+        }>>;
         currentTaskId: z.ZodOptional<z.ZodString>;
         provider: z.ZodOptional<z.ZodString>;
+        modelProvider: z.ZodOptional<z.ZodString>;
         model: z.ZodOptional<z.ZodString>;
         capabilities: z.ZodOptional<z.ZodArray<z.ZodString>>;
+        workspaceId: z.ZodOptional<z.ZodString>;
+        eventCursor: z.ZodOptional<z.ZodNumber>;
+        version: z.ZodOptional<z.ZodNumber>;
         joinedAt: z.ZodNumber;
         lastActiveAt: z.ZodNumber;
     }, z.core.$strip>;
@@ -213,7 +388,15 @@ export declare const domainSchema: {
             normal: "normal";
             low: "low";
         }>;
+        availability: z.ZodOptional<z.ZodEnum<{
+            ready: "ready";
+            locked: "locked";
+        }>>;
         ownerSessionId: z.ZodOptional<z.ZodString>;
+        assignedMemberId: z.ZodOptional<z.ZodString>;
+        assignedRole: z.ZodOptional<z.ZodString>;
+        requiredCapabilities: z.ZodOptional<z.ZodArray<z.ZodString>>;
+        workspaceId: z.ZodOptional<z.ZodString>;
         dependencies: z.ZodArray<z.ZodString>;
         requiresPlan: z.ZodBoolean;
         required: z.ZodBoolean;
@@ -229,10 +412,10 @@ export declare const domainSchema: {
         toSessionId: z.ZodOptional<z.ZodString>;
         type: z.ZodEnum<{
             message: "message";
-            plan: "plan";
-            question: "question";
             result: "result";
+            plan: "plan";
             warning: "warning";
+            question: "question";
             handoff: "handoff";
             review: "review";
             shutdown: "shutdown";
@@ -242,13 +425,30 @@ export declare const domainSchema: {
         deliveryState: z.ZodOptional<z.ZodEnum<{
             failed: "failed";
             pending: "pending";
+            queued: "queued";
+            delivering: "delivering";
             delivered: "delivered";
+            acknowledged: "acknowledged";
         }>>;
         deliveryTransport: z.ZodOptional<z.ZodEnum<{
             "native-followup": "native-followup";
             "native-report": "native-report";
             "durable-inbox": "durable-inbox";
         }>>;
+        deliveryAttempt: z.ZodOptional<z.ZodNumber>;
+        deliveryTargets: z.ZodOptional<z.ZodRecord<z.ZodString, z.ZodObject<{
+            state: z.ZodEnum<{
+                failed: "failed";
+                pending: "pending";
+                queued: "queued";
+                delivering: "delivering";
+                delivered: "delivered";
+                acknowledged: "acknowledged";
+            }>;
+            attempts: z.ZodNumber;
+            deliveredAt: z.ZodOptional<z.ZodNumber>;
+            error: z.ZodOptional<z.ZodString>;
+        }, z.core.$strip>>>;
         deliveredAt: z.ZodOptional<z.ZodNumber>;
         deliveryError: z.ZodOptional<z.ZodString>;
     }, z.core.$strip>;
@@ -305,6 +505,110 @@ export declare const domainSchema: {
         }>;
         createdAt: z.ZodNumber;
         resolvedAt: z.ZodOptional<z.ZodNumber>;
+    }, z.core.$strip>;
+    readonly workspaces: z.ZodObject<{
+        id: z.ZodString;
+        teamId: z.ZodString;
+        memberId: z.ZodOptional<z.ZodString>;
+        taskId: z.ZodOptional<z.ZodString>;
+        repositoryRoot: z.ZodString;
+        branch: z.ZodString;
+        worktreePath: z.ZodString;
+        status: z.ZodEnum<{
+            ready: "ready";
+            review: "review";
+            requested: "requested";
+            creating: "creating";
+            dirty: "dirty";
+            clean: "clean";
+            merged: "merged";
+            abandoned: "abandoned";
+            recoverable: "recoverable";
+        }>;
+        leaseId: z.ZodString;
+        createdAt: z.ZodNumber;
+        updatedAt: z.ZodNumber;
+        lastHeartbeatAt: z.ZodNumber;
+    }, z.core.$strip>;
+    readonly git_workspaces: z.ZodObject<{
+        id: z.ZodString;
+        workspaceId: z.ZodString;
+        repositoryRoot: z.ZodString;
+        branch: z.ZodString;
+        baseRef: z.ZodString;
+        worktreePath: z.ZodString;
+        head: z.ZodOptional<z.ZodString>;
+        changedFiles: z.ZodArray<z.ZodString>;
+        status: z.ZodEnum<{
+            ready: "ready";
+            creating: "creating";
+            dirty: "dirty";
+            clean: "clean";
+            merged: "merged";
+            abandoned: "abandoned";
+            recoverable: "recoverable";
+        }>;
+        createdAt: z.ZodNumber;
+        updatedAt: z.ZodNumber;
+    }, z.core.$strip>;
+    readonly commits: z.ZodObject<{
+        id: z.ZodString;
+        teamId: z.ZodString;
+        workspaceId: z.ZodString;
+        memberId: z.ZodString;
+        taskId: z.ZodOptional<z.ZodString>;
+        hash: z.ZodString;
+        subject: z.ZodString;
+        files: z.ZodArray<z.ZodString>;
+        createdAt: z.ZodNumber;
+    }, z.core.$strip>;
+    readonly review_requests: z.ZodObject<{
+        id: z.ZodString;
+        teamId: z.ZodString;
+        taskId: z.ZodString;
+        workspaceId: z.ZodString;
+        requestedBy: z.ZodString;
+        reviewerMemberId: z.ZodString;
+        baseRef: z.ZodString;
+        headRef: z.ZodString;
+        status: z.ZodEnum<{
+            approved: "approved";
+            rejected: "rejected";
+            requested: "requested";
+            in_review: "in_review";
+            changes_requested: "changes_requested";
+        }>;
+        createdAt: z.ZodNumber;
+        updatedAt: z.ZodNumber;
+    }, z.core.$strip>;
+    readonly review_results: z.ZodObject<{
+        id: z.ZodString;
+        requestId: z.ZodString;
+        reviewerMemberId: z.ZodString;
+        verdict: z.ZodEnum<{
+            approved: "approved";
+            rejected: "rejected";
+            changes_requested: "changes_requested";
+        }>;
+        evidence: z.ZodArray<z.ZodString>;
+        findingIds: z.ZodArray<z.ZodString>;
+        createdAt: z.ZodNumber;
+    }, z.core.$strip>;
+    readonly runtime_events: z.ZodObject<{
+        id: z.ZodString;
+        teamId: z.ZodString;
+        sequence: z.ZodNumber;
+        name: z.ZodString;
+        actorSessionId: z.ZodOptional<z.ZodString>;
+        targetSessionId: z.ZodOptional<z.ZodString>;
+        visibility: z.ZodEnum<{
+            public: "public";
+            internal: "internal";
+        }>;
+        payloadVersion: z.ZodLiteral<1>;
+        dedupeKey: z.ZodOptional<z.ZodString>;
+        payload: z.ZodRecord<z.ZodString, z.ZodUnknown>;
+        createdAt: z.ZodNumber;
     }, z.core.$strip>;
 };
 export type DomainTables = typeof domainSchema;

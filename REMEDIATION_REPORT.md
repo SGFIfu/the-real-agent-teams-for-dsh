@@ -1,5 +1,11 @@
 # Agent Teams Remediation Report
 
+## Current integrated status (2026-08-16)
+
+This report is the evidence ledger for the remediation work. The latest integrated commit is `b951e26` on `integration/agent-teams-v2`. The final local regression was rerun after the last source changes: `npm run typecheck` PASS, `npm run build` PASS, and `npm test` **103/103 PASS across 17 suites**, including shared contracts, Review, Workspace/Git, privacy, security, atomic claiming, persistence, and client registration.
+
+The release decision remains conservative: **PARTIALLY QUALIFIED, not ready for public release**. The remaining blockers are not hidden by the green unit suite: the full live provider run did not complete the Reviewer/fix/re-review/final-success path, the runtime event fallback is explicitly process-local and non-atomic across processes, and the current Harness WebServer path does not expose a caller principal/RBAC hook to wire into production.
+
 Previous Score
 
 63 / 100 — NOT QUALIFIED
@@ -22,7 +28,7 @@ Added `src/client/logic/session.ts` with structural projection of typed Harness 
 
 Validation:
 
-`npm test` passed the two privacy tests: visible assistant/tool data is retained and typed reasoning/private blocks are removed. The real Inspector displayed `LIVE SESSION · PRIVACY-SAFE VIEW` and `reasoning hidden by typed visibility policy`. The host Harness conversation still visibly contains host-owned Think blocks; that residual is outside this plugin’s renderer and is recorded as a system-level caveat, not hidden.
+`npm test` passed the privacy projection tests: visible assistant/tool data is retained and typed reasoning/private blocks are removed. The prior live Inspector run displayed `LIVE SESSION · PRIVACY-SAFE VIEW` and `reasoning hidden by typed visibility policy`. The host Harness conversation still visibly contains host-owned Think blocks; that residual is outside this plugin’s renderer and remains a system-level caveat, not hidden.
 
 ## Team Selection
 
@@ -204,8 +210,59 @@ Rebuilt the package after adding staged member activation, plan-state synchroniz
 
 Validation:
 
-`rtk npm run build` passed and `rtk npm test` passed with **73/73 tests** across 10 suites. The current classic client bundle is 80,225 bytes. A clean browser tab loaded it with no new plugin errors; `#agent-team=team_missing` rendered `Team not found` without retaining Tiny Notes, and returning to the Team List selected the real Tiny Notes Team at `#agent-team=team_00000001_7831f216`. After a real Harness restart, the Backend Inspector still showed `97 public events · open`, typed tool calls/results, and no reasoning rows. The live completion route still rejected the incomplete Team with HTTP 400 `TEAM_NOT_COMPLETABLE` and typed task details. The latest compiled regression also proves native idle events do not erase an owned task's working/blocked semantic status.
+`rtk npm run build` passed and `rtk npm test` passed with **103/103 tests** across 17 suites. The current client bundle is 86,550 bytes. A clean browser tab loaded it with no new plugin errors; `#agent-team=team_missing` rendered `Team not found` without retaining Tiny Notes, and returning to the Team List selected the real Tiny Notes Team at `#agent-team=team_00000001_7831f216`. After a real Harness restart, the Backend Inspector still showed `97 public events · open`, typed tool calls/results, and no reasoning rows. The live completion route still rejected the incomplete Team with HTTP 400 `TEAM_NOT_COMPLETABLE` and typed task details. The latest compiled regression also proves native idle events do not erase an owned task's working/blocked semantic status. The production Service now mounts `WorkspaceManager`, routes production file claims through its session-bound lease path, and exposes workspace/lease tools.
 
 ## Release Decision
 
 The repaired code is materially stronger than the 63/100 baseline and all protected core regression tests pass. It is not yet a Qualified release because real provider quota prevented Reviewer/fix/re-review and final completion success evidence. Live public child-session events and tool activity are now proven; no PASS is awarded for the remaining missing Reviewer/persistent-closure gates.
+
+## P0 Reliability Hardening Addendum — 2026-08-16
+
+The latest change set adds provider/model separation, real-session-first registration, persistent lifecycle and wake hooks, explicit eligibility, bounded capabilities, queued message delivery/retry, and malformed Team-list protection. Local validation is green: typecheck PASS, build PASS, `109/109` tests PASS, client bundle PASS, and dynamic host preflight PASS with 47 tools.
+
+Real Team `team_00000001_45752fca` used four DeepSeek V4 Flash child sessions with native `spawn` and proved plan reject/revise/approve, same-session T3→T5 self-claim, native peer delivery, real file conflict/handoff, and restart persistence. The next Lead turn stopped on the real provider error `402 Insufficient Balance` / `QUOTA`; Tester T4, Reviewer, fix/re-review, final validation and successful completion were not executed. Latest decision: **PARTIALLY IMPROVED**, not QUALIFIED.
+
+Full evidence: [HARNESS_RUNTIME_RELIABILITY_IMPROVEMENT_REPORT.md](HARNESS_RUNTIME_RELIABILITY_IMPROVEMENT_REPORT.md).
+
+## Capability Enforcement Addendum — 2026-08-17
+
+The bounded capability policy is now a real Harness tool-pipeline guard. It
+classifies generic repository/process/Git calls, checks durable member identity,
+capabilities, and file claims, records `CAPABILITY_DECISION`, and denies
+unapproved shell commands, shell file mutation, protected Git actions, and
+unclaimed writes. Reviewer members can run approved verification commands but
+cannot use the generic write path.
+
+Focused regression coverage is green: **112/112 tests across 21 suites**.
+Typecheck, build, client bundle, dynamic host build, and 47-tool preflight also
+pass. The change was developed on `feature/runtime-capability-guard` and
+merged as `28bac54`.
+
+This improves the runtime boundary, but does not change the real-provider
+acceptance boundary: after the rebuilt Harness restart, the existing P0 Team
+continuation again stopped at `402 Insufficient Balance` / `QUOTA`. Tester
+T4, independent Reviewer T6, fix/re-review, T7, and successful final
+completion remain unverified. Final judgment remains **PARTIALLY IMPROVED**.
+
+## Ready-worker reconciliation — 2026-08-17
+
+Root Cause:
+
+Ready-task wake-up depended on the task's first readiness transition. A
+persisted ready task or a task created after a teammate became idle could have
+no new event to trigger scheduling.
+
+Fix:
+
+Added snapshot-first ready-worker reconciliation on member idle, native child
+binding, task creation/assignment, and service startup. Wake attempts are
+bounded and retry only while the target remains idle; successful claims and
+delivery failures clear retry state.
+
+Validation:
+
+The focused creation, idle-retry, persisted-reload, and failed-first-wake
+recovery tests pass. The full compiled suite is 116/116. The live P0 Team reloaded successfully, but T4 was
+not claimed because the next real provider turn remained blocked by
+`402 Insufficient Balance` / `QUOTA`; the live E2E gate is therefore NOT
+VERIFIED.

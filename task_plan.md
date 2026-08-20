@@ -103,3 +103,41 @@ The repaired plugin scores 84/100, UI Grade B, PARTIALLY QUALIFIED. Core service
 - Completion endpoint continued to reject incomplete live Team with `TEAM_NOT_COMPLETABLE` and task IDs.
 - Native idle-event regression keeps an owned member `working/blocked` until its task is released/completed; reassign/block paths also emit synchronized member status events.
 - Hash-change regression clears stale Team state: invalid `team_missing` displays `Team not found`, and selecting Tiny Notes afterward restores the correct hash/workspace.
+
+## Runtime Upgrade v2 Plan (2026-08-16)
+
+### Goal
+
+Upgrade the existing Team runtime with explicit workspace/Git responsibility tracking, auditable runtime events, interface contracts, and testable review/QA integration without regressing the already passing Team invariants.
+
+### Rules
+
+- Do not modify the published branch directly; integrate through `integration/agent-teams-v2`.
+- One logical feature per branch/worktree and one meaningful change per commit.
+- Shared contracts are frozen before feature implementation.
+- Reviewer and QA evidence must come from fresh, independent passes; no fabricated live-provider evidence.
+- Existing task/DAG/claim/persistence/client/privacy tests are regression gates.
+
+### Phases
+
+- [completed] 0. Repository audit and baseline command capture
+- [completed] 1. Feature backlog, consolidation, target architecture, interface freeze
+- [in_progress] 2. Integration branch and isolated worktree layout
+- [pending] 3. Shared core contracts and workspace/Git domain
+- [pending] 4. Runtime events, audit trail, and Service integration
+- [pending] 5. Feature-specific tests and documentation
+- [pending] 6. Leader integration and merge-by-merge regression
+- [pending] 7. Independent reviewer and QA scenario
+- [pending] 8. Final Git/worktree/security/build acceptance
+
+### Current blockers
+
+- Harness peer type packages are not currently present at the absolute paths in `tsconfig.json`; typecheck/build are failing before implementation changes.
+- Codex built-in subagents are available and have been assigned disjoint implementation/review lanes. The lead will integrate only verified commits and will not claim parallel Agent execution without evidence.
+
+### Errors encountered
+
+| Error | Attempt | Resolution |
+|---|---:|---|
+| `rtk ls -la` failed because Windows PATH has no `ls` | 1 | Used `rtk rg --files` and PowerShell read-only tree queries |
+| PowerShell inline `$p` variable expanded by outer shell | 1 | Abandoned the command and reran with single-quoted `-Command` payload |

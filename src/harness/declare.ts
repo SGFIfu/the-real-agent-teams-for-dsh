@@ -34,9 +34,19 @@ declare module '@deepseek-ai/cordis' {
     'agent-teams/task-failed'(payload: { task: TeamTask }): void;
     'agent-teams/task-released'(payload: { task: TeamTask; reason?: string }): void;
     'agent-teams/task-blocked'(payload: { task: TeamTask; reason?: string }): void;
+    'agent-teams/task-ready'(payload: { task: TeamTask }): void;
+    'agent-teams/task-unschedulable'(payload: { task: TeamTask; reason: string }): void;
+    'agent-teams/worker-wakeup-requested'(payload: { task: TeamTask; targetSessionId: string }): void;
+    'agent-teams/worker-wakeup-failed'(payload: { task: TeamTask; targetSessionId: string; error: string }): void;
+    'agent-teams/worker-wakeup-retry-failed'(payload: { teamId: string; taskId: string; sessionId: string; error: string }): void;
 
     'agent-teams/message-sent'(payload: { message: TeamMessage }): void;
     'agent-teams/message-delivery-failed'(payload: { message: TeamMessage; error: string }): void;
+    'agent-teams/message-queued'(payload: { message: TeamMessage; targetSessionId?: string }): void;
+    'agent-teams/message-delivered'(payload: { message: TeamMessage; targetSessionId?: string }): void;
+    'agent-teams/message-acknowledged'(payload: { message: TeamMessage; targetSessionId?: string }): void;
+
+    'agent-teams/capability-decision'(payload: { teamId: string; sessionId: string; capability: string; allowed: boolean; command?: string; workspace?: string; timestamp: number }): void;
 
     'agent-teams/plan-submitted'(payload: { plan: TeamPlan }): void;
     'agent-teams/plan-approved'(payload: { plan: TeamPlan }): void;

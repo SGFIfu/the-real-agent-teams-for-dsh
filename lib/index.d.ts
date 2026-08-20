@@ -18,6 +18,7 @@ import './harness/declare.ts';
 export declare const name = "agent-teams";
 export interface Config {
     defaultProvider: string;
+    defaultModel?: string;
     maxActiveMembers: number;
     /** 'auto' opens the harness storage domain when mounted; 'memory' forces the in-memory store. */
     storageMode: 'auto' | 'memory';
