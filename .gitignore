@@ -10,3 +10,14 @@ Thumbs.db
 .vscode/
 .idea/
 .dsh/
+
+# Private improvement docs (moved to desktop)
+AGENTS.md
+IMPROVEMENT_ACTION_PLAN.md
+PROJECT_COMPARISON_ANALYSIS.md
+PROMPT_FOR_GPT.md
+PROMPT_SIMPLE.txt
+QUICK_ACTION_GUIDE.md
+README_EN.md
+README_ZH.md
+PUBLIC_SHOWCASE_COMPLETE.md
